@@ -57,28 +57,6 @@ _SECONDARY_SEPARATORS = [
     re.compile(r"\s+-\s+"),
 ]
 
-# <scratchpad>
-# Opera's Classical Era - The Kennedy Center — https://www.kennedy-center.org/education/resources-for-educators/classroom-resources/media-and-interactives/media/opera/understanding-opera/operas-classical-era/
-#   • Classical-era Singspiel alternates spoken dialogue with arias, ensembles, and folk-colored ballads so dramatic beats land between sung set pieces, keeping story and music in lockstep.
-# Singspiel | German, Musical Comedy & Comic Opera | Britannica — https://www.britannica.com/art/singspiel
-#   • 18th-century Singspiel keeps comedy light by slotting popular-style songs and choruses between dialogue; Mozart elevates the model with richer orchestration that still respects the speech-song cadence.
-# Film Scoring Concepts You Need to Know - Berklee Online — https://online.berklee.edu/takenote/5-film-scoring-concepts-to-know-for-your-first-movie-score/
-#   • Shot scale guides orchestration: long exterior panoramas tolerate full orchestra swells, while interior closeups call for lean chamber textures or solo instruments.
-#   • Cue endings favor hard outs at sync hits or tail outs that fade beneath dialogue, letting editors bridge scenes cleanly.
-# Music and emotion—a composer's perspective - PMC — https://pmc.ncbi.nlm.nih.gov/articles/PMC3832887/
-#   • Leitmotifs carry characters and ideas the way opera themes do; instrumentation choices (e.g., cello for grief, oboe for innocence, harp for transparency) steer emotional color without words.
-#   • Dynamics, tremolo strings, and tempo lifts supply tension or release that partners on-screen emotion builds.
-# Song Properties and Familiarity Affect Speech Recognition in Musical Noise - PMC — https://pmc.ncbi.nlm.nih.gov/articles/PMC9562996/
-#   • Full mixed songs—especially familiar ones—obscure speech; instrumental-only cues mask less, so sparse classical textures preserve intelligibility between narration beats.
-# Score! Best practices for using music in audio storytelling - NPR — https://www.npr.org/sections/npr-training/2025/05/31/g-s1-67187/score-best-practices-for-using-music-in-audio-storytelling
-#   • Introduce scoring early to set expectations, lean on instrumental beds, and fade to silence ahead of important lines so listeners process key tape uncolored.
-#   • Match metaphor to material: nervous anticipation likes light percussion ostinati, reflection prefers slow drones or pads.
-# Music in audiobooks - NarratorsRoadmap.com — https://www.narratorsroadmap.com/music-in-audiobooks/
-#   • Industry norm keeps music at branded credits only; interstitial beds or underscoring between every chapter frustrate listeners and add licensing overhead.
-# Decoding why you love that film's score - Film Scoring Tips — https://filmscoringtips.com/decoding-why-you-love-that-films-score/
-#   • Classical-derived techniques—leitmotifs, meter shifts, waltz pulses, and orchestrated color swaps—anchor emotional arcs, while short motifs telegraph foreshadowing between spoken beats.
-# </scratchpad>
-
 
 def _split_into_sentences(text: str) -> List[str]:
     sentences: List[str] = []

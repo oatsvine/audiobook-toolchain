@@ -1,21 +1,23 @@
 # Audiobook Toolchain
 
-*File-first audiobook synthesize workflow (Normalize → Cue → Synthesize).*
+*File-first audiobook synthesis workflow anchored in formal acting literature (Normalize → Cue → Synthesize).*
 
 ## TL;DR
 
 Instead of orchestrating an opaque graph, we expose a **deterministic, file-first toolchain**: a **sequence of explicit CLI stages** that read/write **self-contained data directories by convention**. Humans can pause between stages, inspect/change files, and resume. Each stage:
 
 * **Declares preconditions** (required input dirs/files),
-* **Produces versioned, typed artifacts** (Pydantic-shaped JSON + companion text/audio),
-* **Fails fast** on unmet dependencies or risk of clobbering,
-* **Is idempotent** when outputs are identical, and explicit about overwrite policy otherwise.
+* **Split and Normalize** ebook into chunks and normalize (strip non-performable paratext, adapt to spoken word),
+* **Generate Cue Scripts** from speaker Laban profile, rhetoric tag, emphasis,
+* **Manual Editing** edit stage outputs as normal text files,
+* **Synthesize** tuning tables convert cues to precise `chatterbox-tts` for engaging delivery.
 
 This document specifies the general framework and then grounds it in the audiobook workflow:
 
 ```
 parts/ → normalize/ → cues/ → audio/  (→ finalize/)
 ```
+
 ---
 
 ## Core Concepts
@@ -28,7 +30,7 @@ A **workspace** is a folder named after the source text (book or input file). Ev
 <workspace>/
   <EBOOK_FILE>    # original inputs (moved/copied here)
   manifest.json   # optional manifest (indexed view over parts & artifacts)
-  parts/          # maneagable slices of source
+  parts/          # manageable slices of source
   normalize/      # cleaned text + NormalizedOutput JSON
   cues/           # cued chunks + CuedScript JSON
   audio/          # per-chunk WAV + JSON sidecars
@@ -109,17 +111,4 @@ Fix `parts/<name>-part007.txt` → `normalize` (will regenerate `normalize/*part
   * Prefer exact `speaker` name match.
   * Fallback to `default.wav`.
 * Expose `--voices_dir` and allow **per-chunk override** (e.g., `params.audio_prompt_path` in `CuedScript`).
-
----
-
-## Why a “toolchain”?
-
-Creative pipelines benefit from **manual review and iteration**. Graph or agents are excellent for distributed automation, but can hide state and blur boundaries. A toolchain instead:
-
-* **Surfaces boundaries** as directories and files humans see and can edit.
-* **Encodes contracts** via on-disk schemas, not in-memory nodes.
-* **Improves debuggability**: every step has a working folder and sidecars.
-* **Allows focused re-runs**: e.g., fix `parts/part003.txt` then run only `normalize → cue` for that part.
-
-You can still automate end-to-end (e.g., a `make`/`just`/CI job), but **the primary interface is human-driven, stepwise, and file-centric**.
 
