@@ -91,6 +91,9 @@ python -m audiobook_toolchain.synthesize /data/workspace/tts/GospelOfThomas --pr
 
 # (Optional) finalize
 python -m audiobook_toolchain.finalize /data/workspace/tts/GospelOfThomas
+
+# ---- OR - run all at once:
+python -m audiobook_toolchain.book --book_file ~/in/GospelOfThomas.epub --auto
 ```
 
 **Partial re-runs:**
