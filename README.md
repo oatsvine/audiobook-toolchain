@@ -1,6 +1,6 @@
 # Audiobook Toolchain
 
-*A design doc for a generalizable, file-first “toolchain” workflow (example: Normalize → Cue → Synthesize).*
+*File-first audiobook synthesize workflow (Normalize → Cue → Synthesize).*
 
 ## TL;DR
 
