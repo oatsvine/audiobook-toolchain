@@ -1,0 +1,89 @@
+Calibration Inventory for Laban Profiles and Modifiers
+
+Punch - direct, strong, sudden articulation for verdicts and martial cues. Likely modifiers: judicial dialogue using imperative or proper_name emphasis; deliberative treatise cadences with triad_landing; epideictic epistles leaning on rhetorical_question; narrative historical alarms pairing with antithesis.
+Example 1: Judicial Punch Dialogue, imperative + proper_name emphasis.
+Give Caesar his coin, grant God the glory, and march beside James the Righteous as judgment falls.
+Example 2: Deliberative Punch Treatise, triad_landing emphasis.
+Seek until the veil splits, wrestle until the doubt yields, rule the All with a clear verdict.
+Example 3: Epideictic Punch Epistle, rhetorical_question emphasis.
+Will you praise the widow who casts her last denarius, or flee when her courage calls your poverty by name?
+Example 4: Narrative Punch Narrative Historical, antithesis emphasis.
+From Thermopylae to Jerusalem, the brave hold the breach while the weary haggle for calm, so stand with the shield or confess the surrender.
+
+Press - direct, strong, sustained pressure that steadies layered persuasion. Likely modifiers: deliberative treatise arguments riding triad_landing; didactic secondary exposition clarified by definition emphasis; judicial narrative_personal testimony probing with rhetorical_question.
+Example 5: Deliberative Press Treatise, triad_landing emphasis.
+Trace the seed within, tend the shoot with patience, harvest the kingdom that already surrounds you.
+Example 6: Didactic Press Secondary Exposition, definition emphasis.
+Let the disciple learn that repentance is the turning of the plow toward light, not the ritual of empty fasting.
+Example 7: Judicial Press Narrative Personal, rhetorical_question emphasis.
+When the elders accuse, will you not walk to James the Just and lay bare the ledger of your deeds?
+
+Slash - strong, flexible, sudden energy for volatility and threat. Likely modifiers: narrative secondary exposition warning with antithesis; deliberative dialogue that must crack complacency with imperative; epideictic narrative_historical flashes anchored by proper_name lifts.
+Example 8: Narrative Slash Secondary Exposition, antithesis emphasis.
+I cast fire upon the world so the complacent stir, yet I guard the ember that keeps hospitality alive.
+Example 9: Deliberative Slash Dialogue, imperative emphasis.
+Split the false peace, speak the sword of truth, and warn them the house will divide tonight.
+Example 10: Epideictic Slash Narrative Historical, proper_name emphasis.
+Remember Cassandra sounding the gates of Troy as Mary shouts the dawn to those who still sleep.
+
+Wring - indirect, strong, sustained tension that carries grief and reverence. Likely modifiers: lament epistles leaning on rhetorical_question; narrative_personal vigils using triad_landing to release held breath; didactic treatise segments that ask listeners to hold communal sorrow through imperative stillness.
+Example 11: Lament Wring Epistle, rhetorical_question emphasis.
+When you emerge from the tomb and find the lamp untrimmed, who will comfort the fathers who wait in dust?
+Example 12: Narrative Wring Narrative Personal, triad_landing emphasis.
+Grieve the lost child, steady the trembling mother, bind the wounds before the night breaks again.
+Example 13: Didactic Wring Treatise, imperative emphasis.
+Hold the sorrow steady and teach the gathered to breathe in unison until the lament becomes hope.
+
+Flick - indirect, light, sudden sparkle suited to wit, discovery, and quick pivots. Likely modifiers: epideictic dialogue brightened by proper_name lifts; narrative_personal asides hinging on antithesis; deliberative dialogue prodding inquiry through rhetorical_question.
+Example 14: Epideictic Flick Dialogue, proper_name emphasis.
+Thomas, grin at the lion that pretends to rule; it turns to lambs when wisdom names it.
+Example 15: Narrative Flick Narrative Personal, antithesis emphasis.
+A spark of mischief dances where gloom once settled, for the last becomes first the moment the jest lands.
+Example 16: Deliberative Flick Dialogue, rhetorical_question emphasis.
+If the kingdom hides in laughter, will you not tease the dour and free their tongues?
+
+Dab - direct, light, sustained precision that keeps procedures clear. Likely modifiers: didactic secondary exposition outlined with definition; judicial dialogue marking names through proper_name; deliberative treatise signposts using triad_landing.
+Example 17: Didactic Dab Secondary Exposition, definition emphasis.
+Discipline is the lamp that keeps the road lit, not the ashes that darken every bowl.
+Example 18: Judicial Dab Dialogue, proper_name emphasis.
+James, record the tithe, note the witness, seal the verdict before the coins cool.
+Example 19: Deliberative Dab Treatise, triad_landing emphasis.
+Name the premise, weigh the proof, deliver the course your listeners can retrace.
+
+Float - indirect, light, sustained buoyancy for awe and consolation. Likely modifiers: epideictic narrative_personal reflections with no emphasis; deliberative epistles guiding gently through triad_landing; narrative historical reveries that highlight proper_name touchstones.
+Example 20: Epideictic Float Narrative Personal, no emphasis.
+The kingdom within you drifts like a lyre song across the olive hill, inviting you to rest.
+Example 21: Deliberative Float Epistle, triad_landing emphasis.
+Write to the wanderer, remind him of the well, lead him softly back to the table.
+Example 22: Narrative Float Narrative Historical, proper_name emphasis.
+Hear Orpheus cradle the dawn as he names each star to the children still whispering.
+
+Glide - indirect, light, sustained smoothness that keeps exposition legible. Likely modifiers: narrative historical passages mapping journeys with triad_landing; didactic secondary exposition clarifying through definition; narrative_personal confidences floating gentle rhetorical_question prompts.
+Example 23: Narrative Glide Narrative Historical, triad_landing emphasis.
+From the desert road to the inland sea to the hidden garden, the journey unfolds in patient arcs.
+Example 24: Didactic Glide Secondary Exposition, definition emphasis.
+Understanding is the smooth path between seeking and finding, not the cliff of sudden certainty.
+Example 25: Narrative Glide Narrative Personal, rhetorical_question emphasis.
+Will you keep walking beside me and listen as the hidden kingdom rises like morning mist?
+
+Extreme Contrast Suite — Stress-Test the Engine Boundaries.
+Example 26: Cataclysm Punch Dialogue, imperative + triad_landing emphasis.
+Sound the trumpet, break the idols, seal the verdict—let the fire fall now.
+Example 27: Siege Slash Narrative Historical, antithesis + proper_name emphasis.
+Sparta held with bronze and blood, yet Gethsemane trembles with a single whispered James.
+Example 28: Relentless Press Treatise, triad_landing + definition emphasis.
+Justice is the plow that cuts, mercy the rain that softens, restoration the harvest that must not be denied.
+Example 29: Vigil Wring Lament Epistle, rhetorical_question + imperative emphasis.
+Will you stand in the ashes, call their names aloud, and refuse to leave the mourners alone?
+Example 30: Sparkstorm Flick Dialogue, rhetorical_question + proper_name emphasis.
+Can you taste it, Mary, the lightning of joy when the tomb yawns wide and dances?
+Example 31: Surgical Dab Secondary Exposition, definition + proper_name emphasis.
+Discipline is the narrow gate, Thomas; mark it, measure it, mend it before the shadows return.
+Example 32: Horizon Float Narrative Personal, no emphasis.
+The sea exhales blue hush across your shoulders; breathe with it until your pulse becomes tide.
+Example 33: Pilgrimage Glide Narrative Historical, triad_landing + rhetorical_question emphasis.
+You left the desert, crossed the city, entered the orchard—will you stay to hear the wind answer?
+Example 34: Furnace Punch Narrative Personal, imperative + antithesis emphasis.
+Rise, shake the dust from courage, refuse the sleep of fear, and burn brighter than the night.
+Example 35: Hollow Wring Lament Narrative Personal, triad_landing emphasis.
+Kneel by the broken gate, gather the scattered olive leaves, cradle the silence until dawn consents to return.
