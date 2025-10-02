@@ -31,16 +31,17 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
-# —— Your modules (authoritative schemas) ————————————————
 from audiobook_toolchain.normalize import NORMALIZE_PROMPT, NormalizedOutput  # type: ignore[import]  # noqa: E402
 from audiobook_toolchain.cues import CUE_PRIMER, CUE_PROMPT, CuedChunk, CuedScript  # type: ignore[import]  # noqa: E402
 
-# NOTE: If torchaudio exists, we're in the pytorch container, we expect chatterbox to be installed (or fail immediately).
+import torch
 import torchaudio  # type: ignore[import]
 from chatterbox.tts import ChatterboxTTS  # type: ignore[import]
 from pydub import AudioSegment
 
-tts_model = ChatterboxTTS.from_pretrained(device="cuda")
+tts_model = ChatterboxTTS.from_pretrained(
+    device="cuda" if torch.cuda.is_available() else "cpu"
+)
 
 logger.info(
     "torchaudio.version={version} backends={backends}",

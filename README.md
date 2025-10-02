@@ -6,17 +6,17 @@
 
 Instead of orchestrating an opaque graph, we expose a **deterministic, file-first toolchain**: a **sequence of explicit CLI stages** that read/write **self-contained data directories by convention**. Humans can pause between stages, inspect/change files, and resume. Each stage:
 
-* **Declares preconditions** (required input dirs/files),
-* **Split and Normalize** ebook into chunks and normalize (strip non-performable paratext, adapt to spoken word),
-* **Generate Cue Scripts** from speaker Laban profile, rhetoric tag, emphasis,
-* **Manual Editing** edit stage outputs as normal text files,
-* **Synthesize** tuning tables convert cues to precise `chatterbox-tts` for engaging delivery.
-
-This document specifies the general framework and then grounds it in the audiobook workflow:
-
 ```
 parts/ → normalize/ → cues/ → audio/  (→ finalize/)
 ```
+
+* **Declares preconditions** (required input dirs/files).
+* **Splits and normalizes** the ebook into chunks with the LLM (strip non-performable paratext, adapt to spoken word).
+* **Generates cue scripts** with the LLM from the speaker's Laban profile, rhetoric tag, emphasis.
+* **Keeps stage outputs editable** as normal text files.
+* **Synthesizes audio** with TTS tuning tables that convert cues to precise `chatterbox-tts` delivery.
+
+Tested with `gpt-5-mini`; using `langchain` makes it easy to swap the LLM. Married to `chatterbox-tts` until standard exaggeration knobs emerge.
 
 ---
 
@@ -111,4 +111,3 @@ Fix `parts/<name>-part007.txt` → `normalize` (will regenerate `normalize/*part
   * Prefer exact `speaker` name match.
   * Fallback to `default.wav`.
 * Expose `--voices_dir` and allow **per-chunk override** (e.g., `params.audio_prompt_path` in `CuedScript`).
-

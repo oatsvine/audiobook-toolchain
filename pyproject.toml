@@ -11,11 +11,12 @@ requires-python = ">=3.11"
 authors = [
   { name = "Generative Agents Team" }
 ]
-keywords = ["tts", "audiobook", "cue scripts", "laban"]
+keywords = ["tts", "audiobook", "cue scripts", "laban", "chatterbox-tts", "langchain"]
 dependencies = [
   "fire>=0.5.0",
   "loguru>=0.7.2",
   "pydantic>=2.10.0",
+  "pydantic-xml>=2.17.3",
   "langchain-core>=0.3.0,<1.0.0",
   "langchain-openai>=0.2.0,<1.0.0",
   "langchain-text-splitters>=0.1.0,<1.0.0",
@@ -26,10 +27,12 @@ dependencies = [
 
 [project.optional-dependencies]
 tts = [
-  "torchaudio>=2.2.0",
   "chatterbox-tts @ git+https://github.com/resemble-ai/chatterbox.git",
   "pykakasi==2.3.0",
   "pkuseg==0.0.25",
+]
+torch = [
+  "torchaudio>=2.6.0",
 ]
 dev = [
   "pytest>=8.3.0",
@@ -40,9 +43,6 @@ dev = [
 
 [tool.setuptools]
 packages = ["audiobook_toolchain"]
-
-[tool.setuptools.package-data]
-audiobook_toolchain = ["*.txt"]
 
 [tool.pyright]
 include = ["audiobook_toolchain", "tests"]

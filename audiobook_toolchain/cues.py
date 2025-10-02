@@ -787,6 +787,26 @@ class CuedChunk(BaseModel):
         Produce a reviewer-friendly line approximating cue script.
         Example: [char:socrates|profile=Press][pace=std] Text. [pause:med]
         """
+        # TODO: migrate to XML formatting to make easier to edit the cue script.
+        # Example: <cue char="socrates", profile="press", pace="std">Text. </pause type="med"/></cue>
+        # Then remove the separate cues/{txt,json} in favor of a single cues/{xml} file.
+        # Remove this `format` entirely in favor of proper pydanticxml modeling (crawl and study examples here for syntax/usage: https://github.com/dapper91/pydantic-xml/tree/master/examples). Rework the pydantic structures as needed, DON"T create adapters. Quick example below:
+        # class Product(BaseXmlModel):
+        #     status: Literal['running', 'development'] = attr()  # extracted from the 'status' attribute
+        #     launched: Optional[int] = attr(default=None)  # extracted from the 'launched' attribute
+        #     title: str  # extracted from the element text
+        #
+        # class Company(BaseXmlModel):
+        #     trade_name: str = attr(name='trade-name')  # extracted from the 'trade-name' attribute
+        #     website: HttpUrl = element()  # extracted from the 'website' element text
+        #     products: List[Product] = element(tag='product', default=[])  # extracted from the 'Company' element's children
+        # DON'T TRY TO SUPPORT backward compatibility! KISS - study AGENTS.md with focus on not overengineering.
+        # <scratchpad>
+        # WRITE REASONING AND RESEARCH WITH CITATIONS (including page titles and urls) HERE
+        # </scratchpad>
+        #
+        # › review TODO in audiobook_toolchain/cues.py before starting, search and scrape 2-3 xml stantard for inspiration, but keep it very simple (stay close to existing model and pydanticxml non-negotiable). make and action plan and implement. you must also work out all side effects on audiobook_toolchain/workflow.py etc
+        #
         front = []
         if self.speaker and self.speaker != "narrator":
             front.append(f"[char:{self.speaker}|profile={self.profile}]")
