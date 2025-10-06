@@ -7,6 +7,7 @@ from enum import Enum
 from typing import Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic_xml import BaseXmlModel, attr, element, wrapped
 
 from audiobook_toolchain.normalize import TextType
 
@@ -340,29 +341,29 @@ class ScoringCadence(str, Enum):
     suspended = "suspended"
 
 
-class ScoringCue(BaseModel):
+class ScoringCue(BaseXmlModel, tag="scoring"):
     """Optional classical scoring direction attached to a cue chunk."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    placement: ScoringPlacement = Field(
+    placement: ScoringPlacement = attr(
         description="Where the cue should fall relative to narration blocks."
     )
-    texture: ScoringTexture = Field(
+    texture: ScoringTexture = attr(
         description="Primary instrumentation palette (classical acoustic)."
     )
-    emotion: ScoringEmotion = Field(
+    emotion: ScoringEmotion = attr(
         description="Emotional contour the music should reinforce."
     )
-    tempo: ScoringTempo = Field(
+    tempo: ScoringTempo = attr(
         default=ScoringTempo.andante,
         description="Overall pace reference using classical terminology.",
     )
-    intensity: ScoringIntensity = Field(
+    intensity: ScoringIntensity = attr(
         default=ScoringIntensity.delicate,
         description="Relative dynamic weight to keep balance with narration.",
     )
-    cadence: ScoringCadence = Field(
+    cadence: ScoringCadence = attr(
         default=ScoringCadence.tail_out,
         description="How the music should exit the moment.",
     )
@@ -436,7 +437,7 @@ class EmphasisStrategy(str, Enum):
 # listener engagement. citeturn1firecrawl_scrape2
 
 
-class EmphasisSpan(BaseModel):
+class EmphasisSpan(BaseXmlModel, tag="span"):
     """
     Inline emphasis guidance for renderer (no SSML): use to nudge micro-pauses or slight gain.
     """
@@ -445,14 +446,22 @@ class EmphasisSpan(BaseModel):
     phrase: str = Field(
         description="Exact substring to emphasize (must appear verbatim in text)."
     )
-    strategy: EmphasisStrategy = Field(
+    strategy: EmphasisStrategy = attr(
         description="Acting technique informing emphasis."
     )
-    pause_before_ms: int = Field(
-        0, ge=0, le=600, description="Optional micro-pause before phrase."
+    pause_before_ms: int = attr(
+        name="pause-before-ms",
+        default=0,
+        ge=0,
+        le=600,
+        description="Optional micro-pause before phrase.",
     )
-    pause_after_ms: int = Field(
-        0, ge=0, le=600, description="Optional micro-pause after phrase."
+    pause_after_ms: int = attr(
+        name="pause-after-ms",
+        default=0,
+        ge=0,
+        le=600,
+        description="Optional micro-pause after phrase.",
     )
 
 
@@ -648,40 +657,56 @@ def _clamp_param(name: str, value: float) -> float:
 # ---------- Chunk and script ----------
 
 
-class CuedChunk(BaseModel):
+class CuedChunk(BaseXmlModel, tag="chunk", skip_empty=True):
     """
     Atomic delivery unit for synthesis. One chunk = one contiguous line of delivery
     with a single set of engine params. No mid-chunk changes to params.
     """
 
-    idx: int = Field(description="1-based index in reading order.")
-    text: str = Field(
-        description="Normalized text to synthesize. Punctuation already audience-friendly."
+    idx: int = attr(description="1-based index in reading order.")
+    text: str = element(
+        tag="text",
+        description="Normalized text to synthesize. Punctuation already audience-friendly.",
     )
-    speaker: str = Field(
+    speaker: str = attr(
         description="Normalized speaker name for this chunk (lowercase, dashes), or 'narrator' if generic."
     )
-    text_type: TextType = Field(
-        description="Discourse category for this chunk (see Normalization stage)."
+    text_type: TextType = attr(
+        name="text-type",
+        description="Discourse category for this chunk (see Normalization stage).",
     )
-    rhetoric: RhetoricTag = Field(
+    rhetoric: RhetoricTag = attr(
         description="Optional rhetorical function, if inferable."
     )
-    profile: Profile = Field(
+    profile: Profile = attr(
         description="Delivery palette influencing engine defaults (Laban-derived)."
     )
-    audio_prompt_path: Optional[str] = Field(
-        default=None, description="Per-chunk voice conditioning file; optional."
+    audio_prompt_path: Optional[str] = attr(
+        name="audio-prompt",
+        default=None,
+        description="Per-chunk voice conditioning file; optional.",
     )
-    pre_pause_ms: int = Field(
-        0, ge=0, le=4000, description="Silence before this chunk (externalized)."
+    pre_pause_ms: int = attr(
+        name="pre-pause-ms",
+        default=0,
+        ge=0,
+        le=4000,
+        description="Silence before this chunk (externalized).",
     )
-    post_pause_ms: int = Field(
-        0, ge=0, le=4000, description="Silence after this chunk (externalized)."
+    post_pause_ms: int = attr(
+        name="post-pause-ms",
+        default=0,
+        ge=0,
+        le=4000,
+        description="Silence after this chunk (externalized).",
     )
-    emphasis: List[EmphasisSpan] = Field(
-        default_factory=list,
-        description="Optional emphasis spans for renderer to apply subtle micro-pauses/gain.",
+    emphasis: List[EmphasisSpan] = wrapped(
+        "emphasis",
+        element(
+            tag="span",
+            default_factory=list,
+            description="Optional emphasis spans for renderer to apply subtle micro-pauses/gain.",
+        ),
     )
 
     def split_text(self) -> List[str]:
@@ -781,115 +806,39 @@ class CuedChunk(BaseModel):
             **{name: _clamp_param(name, value) for name, value in base.items()}
         )
 
-    # -------- Human-readable reviewer string (no effect on synthesis) --------
-    def format(self) -> str:
-        """
-        Produce a reviewer-friendly line approximating cue script.
-        Example: [char:socrates|profile=Press][pace=std] Text. [pause:med]
-        """
-        # TODO: migrate to XML formatting to make easier to edit the cue script.
-        # Example: <cue char="socrates", profile="press", pace="std">Text. </pause type="med"/></cue>
-        # Then remove the separate cues/{txt,json} in favor of a single cues/{xml} file.
-        # Remove this `format` entirely in favor of proper pydanticxml modeling (crawl and study examples here for syntax/usage: https://github.com/dapper91/pydantic-xml/tree/master/examples). Rework the pydantic structures as needed, DON"T create adapters. Quick example below:
-        # class Product(BaseXmlModel):
-        #     status: Literal['running', 'development'] = attr()  # extracted from the 'status' attribute
-        #     launched: Optional[int] = attr(default=None)  # extracted from the 'launched' attribute
-        #     title: str  # extracted from the element text
-        #
-        # class Company(BaseXmlModel):
-        #     trade_name: str = attr(name='trade-name')  # extracted from the 'trade-name' attribute
-        #     website: HttpUrl = element()  # extracted from the 'website' element text
-        #     products: List[Product] = element(tag='product', default=[])  # extracted from the 'Company' element's children
-        # DON'T TRY TO SUPPORT backward compatibility! KISS - study AGENTS.md with focus on not overengineering.
-        # <scratchpad>
-        # WRITE REASONING AND RESEARCH WITH CITATIONS (including page titles and urls) HERE
-        # </scratchpad>
-        #
-        # › review TODO in audiobook_toolchain/cues.py before starting, search and scrape 2-3 xml stantard for inspiration, but keep it very simple (stay close to existing model and pydanticxml non-negotiable). make and action plan and implement. you must also work out all side effects on audiobook_toolchain/workflow.py etc
-        #
-        front = []
-        if self.speaker and self.speaker != "narrator":
-            front.append(f"[char:{self.speaker}|profile={self.profile}]")
-        else:
-            front.append(f"[profile={self.profile}]")
-        params = self.engine_params()
-        # show a pace hint derived from cfg_weight
-        pace = (
-            "slow"
-            if params.cfg_weight <= 0.4
-            else "fast" if params.cfg_weight >= 0.7 else "std"
-        )
-        front.append(f"[pace={pace}]")
-        front.append(f"[rh:{self.rhetoric}]")
-        tail = []
 
-        # map pauses to a readable label
-        def lab(ms: int) -> Optional[str]:
-            if ms == 0:
-                return None
-            # nearest of short~180, med~420, long~900, hold~1500
-            diffs = [
-                (abs(ms - t), l)
-                for t, l in [
-                    (180, "short"),
-                    (420, "med"),
-                    (900, "long"),
-                    (1500, "hold"),
-                ]
-            ]
-            return min(diffs, key=lambda x: x[0])[1]
+class ScoredCuedChunk(CuedChunk):
+    """Cue chunk variant that carries scoring direction via inheritance."""
 
-        if lbl := lab(self.post_pause_ms):
-            tail.append(f"[pause:{lbl}]")
-        if self.emphasis:
-            # compact emphasis hint
-            tail.append(f"[emph:{','.join(e.strategy for e in self.emphasis)}]")
-        return (
-            " ".join(front)
-            + " "
-            + self.text.strip()
-            + (" " + " ".join(tail) if tail else "")
-        )
-
-
-class CueChunkScored(BaseModel):
-    scoring: Optional[ScoringCue] = Field(
-        default=None,
-        description="Optional classical scoring cue; omit unless music materially helps the beat.",
+    scoring: ScoringCue = element(
+        tag="scoring",
+        description="Classical scoring cue attached to this chunk.",
     )
 
-    def format_score(self) -> Optional[str]:
-        if not self.scoring:
-            return None
-        return (
-            "[score:"
-            + ",".join(
-                [
-                    self.scoring.placement.value,
-                    self.scoring.texture.value,
-                    self.scoring.emotion.value,
-                    f"{self.scoring.tempo.value}:{self.scoring.intensity.value}",
-                    self.scoring.cadence.value,
-                ]
-            )
-            + "]"
-        )
 
-
-class CuedScript(BaseModel):
+class CuedScript(BaseXmlModel, tag="cue-script"):
     """
     Full cue plan for a document; iterate chunks and synthesize in order.
     """
 
-    text_name: str = Field(description="Name of this text for filenames and logs.")
-    chunks: List[CuedChunk] = Field(description="Ordered list of atomic chunks.")
-    speakers: List[str] = Field(
-        description="All speakers that appear in this script, normalized (lowercase, dashes)."
-    )
+    model_config = ConfigDict(extra="forbid")
 
-    def format(self) -> str:
-        """Human-readable consolidated script for review."""
-        return "\n".join(ch.format() for ch in self.chunks)
+    text_name: str = attr(
+        name="text-name", description="Name of this text for filenames and logs."
+    )
+    speakers: List[str] = wrapped(
+        "speakers",
+        element(
+            tag="speaker",
+            default_factory=list,
+            description="All speakers that appear in this script, normalized (lowercase, dashes).",
+        ),
+    )
+    chunks: List[CuedChunk] = element(
+        tag="chunk",
+        default_factory=list,
+        description="Ordered list of atomic chunks.",
+    )
 
 
 CUE_PROMPT = """

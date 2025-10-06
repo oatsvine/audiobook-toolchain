@@ -9,7 +9,7 @@ from audiobook_toolchain.normalize import NormalizedOutput
 
 
 def _has_openai() -> bool:
-    return bool(os.environ.get("OPENAI_API_TEST_KEY"))
+    return bool(os.environ.get("OPENAI_API_KEY"))
 
 
 TEXT_MD = """
@@ -72,8 +72,6 @@ def test_llm_segmentation_end_to_end(tmp_path: Path):
     from langchain_openai import ChatOpenAI
     from audiobook_toolchain.workflow import Toolchain
 
-    os.environ["OPENAI_API_KEY"] = os.environ["OPENAI_API_TEST_KEY"]
-
     # Prefer a widely available small model; allow override via env.
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
@@ -122,12 +120,10 @@ def test_llm_segmentation_end_to_end(tmp_path: Path):
 
     cue_dir = work_dir / "cues"
     assert cue_dir.is_dir(), "Cue stage did not produce directory"
-    cue_json_path = next(cue_dir.glob("*-cues.json"), None)
-    assert cue_json_path is not None, "Cue JSON output missing"
-    review_path = cue_json_path.with_name(cue_json_path.stem + "-review.txt")
-    assert review_path.is_file(), "Cue review output missing"
+    cue_xml_path = next(cue_dir.glob("*-cues.xml"), None)
+    assert cue_xml_path is not None, "Cue XML output missing"
 
-    script = CuedScript.model_validate_json(cue_json_path.read_text())
+    script = CuedScript.from_xml(cue_xml_path.read_text())
     assert script.chunks, "CuedScript contains no chunks"
     assert script.text_name == normalized.text_name
     chunk_lengths = [len(chunk.text) for chunk in script.chunks]
@@ -143,3 +139,21 @@ def test_llm_segmentation_end_to_end(tmp_path: Path):
 
     assert script.speakers, "CuedScript speakers list is empty"
     assert set(script.speakers).issuperset({chunk.speaker for chunk in script.chunks})
+
+    serialized = script.to_xml(encoding="unicode", pretty_print=True, skip_empty=True)
+    round_tripped = CuedScript.from_xml(serialized)
+    assert round_tripped.model_dump() == script.model_dump()
+
+    adjusted_first_chunk = round_tripped.chunks[0].model_copy(
+        update={"post_pause_ms": round_tripped.chunks[0].post_pause_ms + 120}
+    )
+    adjusted_script = round_tripped.model_copy(
+        update={"chunks": [adjusted_first_chunk, *round_tripped.chunks[1:]]}
+    )
+    adjusted_payload = adjusted_script.to_xml(
+        encoding="unicode", pretty_print=True, skip_empty=True
+    )
+    adjusted_path = cue_dir / f"{normalized.text_name}-part{1:03d}-adjusted.xml"
+    adjusted_path.write_text(adjusted_payload)
+    reloaded_script = CuedScript.from_xml(adjusted_payload)
+    assert reloaded_script.chunks[0].post_pause_ms == adjusted_first_chunk.post_pause_ms

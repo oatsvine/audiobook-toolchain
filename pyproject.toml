@@ -13,32 +13,29 @@ authors = [
 ]
 keywords = ["tts", "audiobook", "cue scripts", "laban", "chatterbox-tts", "langchain"]
 dependencies = [
-  "fire>=0.5.0",
-  "loguru>=0.7.2",
-  "pydantic>=2.10.0",
-  "pydantic-xml>=2.17.3",
-  "langchain-core>=0.3.0,<1.0.0",
-  "langchain-openai>=0.2.0,<1.0.0",
-  "langchain-text-splitters>=0.1.0,<1.0.0",
-  "tiktoken>=0.7.0",
-  "unstructured[md]>=0.15.0",
-  "pydub>=0.25.1",
+  "fire",
+  "loguru",
+  "pydantic",
+  "pydantic-xml",
+  "langchain-core",
+  "langchain-openai",
+  "langchain-text-splitters",
+  "tiktoken",
+  "unstructured[md]",
+  "pydub",
 ]
 
 [project.optional-dependencies]
-tts = [
-  "chatterbox-tts @ git+https://github.com/resemble-ai/chatterbox.git",
-  "pykakasi==2.3.0",
-  "pkuseg==0.0.25",
-]
-torch = [
-  "torchaudio>=2.6.0",
-]
+# tts = [
+#   "chatterbox-tts @ git+https://github.com/resemble-ai/chatterbox.git",
+#   "pykakasi==2.3.0",
+#   "pkuseg==0.0.25",
+# ]
 dev = [
-  "pytest>=8.3.0",
-  "pytest-asyncio>=0.23.0",
-  "pyright>=1.1.377",
-  "black>=24.8.0",
+  "pytest",
+  "pytest-asyncio",
+  "pyright",
+  "black",
 ]
 
 [tool.setuptools]
@@ -48,6 +45,13 @@ packages = ["audiobook_toolchain"]
 include = ["audiobook_toolchain", "tests"]
 exclude = ["**/node_modules", "**/__pycache__", "lib"]
 strict = true
+
+[tool.uv]
+override-dependencies = [
+  "langchain>=1.0.0a6",
+  "langgraph>=1.0.0a4",
+  "langchain-openai>=1.0.0a3",
+]
 
 [tool.uv.pip]
 prerelease = "allow"

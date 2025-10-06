@@ -3,6 +3,7 @@ import pytest
 from audiobook_toolchain.cues import (
     CUE_PRIMER_TEXT,
     CuedChunk,
+    CuedScript,
     EmphasisSpan,
     EmphasisStrategy,
     Profile,
@@ -60,6 +61,61 @@ def test_emphasis_strategies_respect_limits(strategy: EmphasisStrategy) -> None:
         assert (
             lower <= value <= upper
         ), f"{field_name} out of bounds for emphasis={strategy}: {value}"
+
+
+def test_cued_script_xml_roundtrip_and_mutation() -> None:
+    chunk_one = CuedChunk(
+        idx=1,
+        text="First chunk. Second sentence?",
+        speaker="narrator",
+        text_type=TextType.NARRATIVE_HISTORICAL,
+        rhetoric=RhetoricTag.narrative,
+        profile=Profile.Glide,
+        pre_pause_ms=120,
+        post_pause_ms=240,
+        emphasis=[
+            EmphasisSpan(
+                phrase="First chunk",
+                strategy=EmphasisStrategy.DEFINITION,
+                pause_before_ms=30,
+                pause_after_ms=40,
+            )
+        ],
+    )
+    chunk_two = CuedChunk(
+        idx=2,
+        text="Respond with confidence!",
+        speaker="mary-magdalene",
+        text_type=TextType.DIALOGUE,
+        rhetoric=RhetoricTag.deliberative,
+        profile=Profile.Press,
+    )
+    script = CuedScript(
+        text_name="gospel-of-mary",
+        speakers=["narrator", "mary-magdalene"],
+        chunks=[chunk_one, chunk_two],
+    )
+
+    xml_payload = script.to_xml(encoding="unicode", pretty_print=True, skip_empty=True)
+    assert "<cue-script" in xml_payload
+    assert "<chunk idx=\"1\"" in xml_payload
+
+    round_tripped = CuedScript.from_xml(xml_payload)
+    assert round_tripped.model_dump() == script.model_dump()
+
+    updated_chunk_one = round_tripped.chunks[0].model_copy(
+        update={"text": "Updated first chunk."}
+    )
+    updated_script = round_tripped.model_copy(
+        update={"chunks": [updated_chunk_one, *round_tripped.chunks[1:]]}
+    )
+
+    updated_xml = updated_script.to_xml(encoding="unicode", pretty_print=True, skip_empty=True)
+    reloaded = CuedScript.from_xml(updated_xml)
+
+    assert reloaded.chunks[0].text == "Updated first chunk."
+    assert reloaded.chunks[0].emphasis[0].phrase == "First chunk"
+    assert reloaded.chunks[1].speaker == "mary-magdalene"
 
 
 def test_primer_text_is_available() -> None:

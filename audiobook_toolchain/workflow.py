@@ -107,10 +107,10 @@ class CueEntry(BaseModel):
     text_name: str
     part: int
     script: CuedScript
-    json_path: Path
+    xml_path: Path
 
 
-class ChunkEntry(CuedChunk):
+class ChunkEntry(BaseModel):
     duration: float
     position: float
     phrases: List[str]
@@ -337,15 +337,15 @@ class Toolchain:
 
     def _iter_cues(self, cue_dir: Path) -> List[CueEntry]:
         entries: List[CueEntry] = []
-        for json_path in sorted(cue_dir.glob("*-cues.json")):
-            text_name, part = self._parse_part_filename(json_path.stem, "-cues")
-            script = CuedScript.model_validate_json(json_path.read_text())
+        for xml_path in sorted(cue_dir.glob("*-cues.xml")):
+            text_name, part = self._parse_part_filename(xml_path.stem, "-cues")
+            script = CuedScript.from_xml(xml_path.read_text())
             entries.append(
                 CueEntry(
                     text_name=text_name,
                     part=part,
                     script=script,
-                    json_path=json_path,
+                    xml_path=xml_path,
                 )
             )
         entries.sort(key=lambda entry: (entry.text_name, entry.part))
@@ -645,12 +645,12 @@ class Toolchain:
                 logger.debug("cue.speakers merged={speakers}", speakers=merged_speakers)
 
             stem = f"{entry.text_name}-part{entry.part:03d}-cues"
-            json_path = cue_dir / f"{stem}.json"
-            review_path = cue_dir / f"{stem}-review.txt"
-            json_path.write_text(
-                script.model_dump_json(indent=2, exclude_none=True, exclude_unset=True)
+            xml_path = cue_dir / f"{stem}.xml"
+            xml_payload = script.to_xml(
+                encoding="unicode", pretty_print=True, skip_empty=True
             )
-            review_path.write_text(script.format())
+            assert isinstance(xml_payload, str)
+            xml_path.write_text(xml_payload)
 
             norm_len = len(entry.normalized.cleaned_text)
             chunk_len = sum(len(chunk.text) for chunk in script.chunks)
@@ -682,7 +682,7 @@ class Toolchain:
         voice_files: str = "default:enoch",
         prepare_conditionals: bool = False,
     ) -> None:
-        """Stage C — synthesize audio for each chunk in cues/*.json."""
+        """Stage C — synthesize audio for each chunk in cues/*.xml."""
         workspace = self._resolve_workspace(work_dir)
         cue_dir = workspace / "cues"
         if not cue_dir.exists():
@@ -782,7 +782,6 @@ class Toolchain:
                 )
                 meta = ChunkEntry.model_validate(
                     {
-                        **chunk.model_dump(),
                         "duration": base_audio.duration_seconds,
                         "position": position,
                         "phrases": spoken_phrases or phrases,

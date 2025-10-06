@@ -32,7 +32,7 @@ A **workspace** is a folder named after the source text (book or input file). Ev
   manifest.json   # optional manifest (indexed view over parts & artifacts)
   parts/          # manageable slices of source
   normalize/      # cleaned text + NormalizedOutput JSON
-  cues/           # cued chunks + CuedScript JSON
+  cues/           # cued chunks + CuedScript XML
   audio/          # per-chunk WAV + JSON sidecars
 ```
 
@@ -56,12 +56,12 @@ A **workspace** is a folder named after the source text (book or input file). Ev
 
 * **Inputs:** `normalize/*.json` + `normalize/*.txt`.
 * **Process:** run LLM with **structured outputs** → `CuedScript`.
-* **Outputs:** `…-cues.json` + `…-review.txt` (human-readable summary).
+* **Outputs:** `…-cues.xml` (editable cue script).
 * **Checks:** coverage heuristic (total chunk text vs normalized length).
 
 ### D. `audio/` (synthesize)
 
-* **Inputs:** `cues/*.json` + voice assets in `voices/`.
+* **Inputs:** `cues/*.xml` + voice assets in `voices/`.
 * **Process:** TTS per chunk; write per-chunk WAV + sidecar JSON.
 * **Outputs:** `audio/*.wav` + `audio/*.json`.
 
