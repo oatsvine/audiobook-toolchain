@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Tuple
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_xml import BaseXmlModel, attr, element, wrapped
 
-from audiobook_toolchain.normalize import TextType
+from laban_tts.normalize import TextType
 
 import tiktoken
 

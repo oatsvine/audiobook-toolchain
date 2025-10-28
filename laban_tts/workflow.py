@@ -33,8 +33,14 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
-from audiobook_toolchain.normalize import NORMALIZE_PROMPT, NormalizedOutput  # type: ignore[import]  # noqa: E402
-from audiobook_toolchain.cues import CUE_PRIMER, CUE_PROMPT, CuedChunk, CuedScript  # type: ignore[import]  # noqa: E402
+from laban_tts.normalize import (
+    NORMALIZE_PROMPT,
+    NormalizedOutput,
+    PartEntry,
+    PartMeta,
+    partition_text,
+)
+from laban_tts.cues import CUE_PRIMER, CUE_PROMPT, CuedScript
 
 import torch
 import torchaudio  # type: ignore[import]
@@ -63,30 +69,7 @@ logger.info(
 class Manifest(BaseModel):
     text_name: str
     workspace: Path
-    kind: Literal["text", "book"] = "book"
-
-
-class PartMeta(BaseModel):
-    """Sidecar describing one text part produced during preparation."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    text_name: str = Field(min_length=1)
-    part: int = Field(ge=1)
-    source: str = Field(description="Original source path or URL for this part.")
-    last_excerpt: Optional[str] = Field(default=None)
-    next_excerpt: Optional[str] = Field(default=None)
-
-
-class PartEntry(BaseModel):
-    """In-memory representation of a part ready for normalization."""
-
-    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
-
-    meta: PartMeta
-    text_path: Path
-    meta_path: Path
-    text: str
+    kind: Literal["book"] = "book"
 
 
 class NormalizedEntry(BaseModel):
@@ -121,51 +104,6 @@ class ChunkEntry(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 # Partitioning helpers
 # ─────────────────────────────────────────────────────────────────────────────
-
-
-def partition_text(
-    path_or_url: Path | str, chunk_tokens: int = 5000
-) -> Generator[Tuple[PartMeta, str], None, None]:
-    """Read a local file or URL and yield (metadata, text) pairs for each part."""
-
-    if isinstance(path_or_url, str) and path_or_url.startswith("http"):
-        text_name = path_or_url.split("/")[-1].split(".")[0]
-        elements = partition(url=path_or_url)
-    else:
-        path = Path(path_or_url)
-        assert path.exists(), f"File {path} does not exist."
-        text_name = path.stem
-        elements = partition(filename=str(path.resolve()))
-
-    logger.info(
-        "Partitioned {count} elements from {source}",
-        count=len(elements),
-        source=path_or_url,
-    )
-    text = "\n\n".join([e.text for e in elements if e.text and e.text.strip()])
-
-    # Chunk by token budget for LLM calls
-    part_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
-        model_name="gpt-4o",
-        chunk_size=chunk_tokens,
-        chunk_overlap=0,
-    )
-    excerpt_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=120,
-        chunk_overlap=0,
-        length_function=len,
-        is_separator_regex=False,
-    )
-
-    texts = part_splitter.split_text(text)
-    logger.info("Split into {count} parts", count=len(texts))
-    for idx, content in enumerate(texts, start=1):
-        meta = PartMeta(text_name=text_name, part=idx, source=str(path_or_url))
-        if idx > 1:
-            meta.last_excerpt = "…" + excerpt_splitter.split_text(texts[idx - 2])[-1]
-        if idx < len(texts):
-            meta.next_excerpt = excerpt_splitter.split_text(texts[idx])[:1][0] + "…"
-        yield meta, content
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -281,7 +219,21 @@ class Toolchain:
     # —————————————————— Stage helpers ——————————————————
 
     @staticmethod
+    def _parse_part_filename(stem: str, suffix: str) -> Tuple[str, int]:
+        """Extract (text_name, part) from a stage artifact stem."""
+        if not stem.endswith(suffix):
+            raise ValueError(f"Stem {stem} does not end with expected suffix {suffix}.")
+        base = stem[: -len(suffix)]
+        if base.endswith("-"):
+            base = base[:-1]
+        if "-part" not in base:
+            raise ValueError(f"Stem {stem} is missing -partNNN.")
+        text_name, part_str = base.rsplit("-part", 1)
+        return text_name, int(part_str)
+
+    @staticmethod
     def _iter_parts(parts_dir: Path) -> List[PartEntry]:
+        # TODO: Change to use XML
         entries: List[PartEntry] = []
         for text_path in sorted(parts_dir.glob("*.txt")):
             meta_path = text_path.with_suffix(".json")
@@ -299,20 +251,8 @@ class Toolchain:
         entries.sort(key=lambda entry: entry.meta.part)
         return entries
 
-    @staticmethod
-    def _parse_part_filename(stem: str, suffix: str) -> Tuple[str, int]:
-        """Extract (text_name, part) from a stage artifact stem."""
-        if not stem.endswith(suffix):
-            raise ValueError(f"Stem {stem} does not end with expected suffix {suffix}.")
-        base = stem[: -len(suffix)]
-        if base.endswith("-"):
-            base = base[:-1]
-        if "-part" not in base:
-            raise ValueError(f"Stem {stem} is missing -partNNN.")
-        text_name, part_str = base.rsplit("-part", 1)
-        return text_name, int(part_str)
-
     def _iter_normalized(self, normalize_dir: Path) -> List[NormalizedEntry]:
+        # TODO: Change to use XML
         entries: List[NormalizedEntry] = []
         for json_path in sorted(normalize_dir.glob("*-normalized.json")):
             text_path = json_path.with_suffix(".txt")
@@ -352,6 +292,20 @@ class Toolchain:
         entries.sort(key=lambda entry: (entry.text_name, entry.part))
         return entries
 
+    def normalize(self, workspace: Path) -> None:
+        """Stage A — produce NormalizedOutput from parts/*.txt."""
+        parts_dir = workspace / "parts"
+        if not parts_dir.exists():
+            raise FileNotFoundError(f"Parts directory missing: {parts_dir}")
+
+        logger.info("normalize.start work_dir={work_dir}", work_dir=workspace)
+        normalize_dir = workspace / "normalize"
+        self._prepare_output_dir(normalize_dir, stage="normalize")
+
+        part_entries = self._iter_parts(parts_dir)
+        if not part_entries:
+            raise ValueError("No parts found to normalize.")
+
     def _run_full_pipeline(
         self,
         work_dir: Path | str,
@@ -372,115 +326,34 @@ class Toolchain:
 
     # —————————————————— Stage commands ——————————————————
 
-    def book(
+    def run(
         self,
-        book_file: Path | str = "",
-        chunk_tokens: int = 3500,
+        text_file: Path | str = "",
         auto: bool = False,
         voice_files: str = "default:enoch",
         prepare_conditionals: bool = False,
     ) -> Path:
-        """Partition an EPUB into workspace parts/ for subsequent stages."""
-        if not book_file:
-            book_file = self.choose_book()
+        """Partition an EPUB, PDF, etc into workspace parts/ for subsequent stages."""
+        if not text_file:
+            text_file = self.choose_book()
         else:
-            book_file = Path(book_file)
+            text_file = Path(text_file)
 
-        assert book_file.exists(), f"Book file {book_file} does not exist."
-        logger.info(
-            "book.start source={source} chunk_tokens={chunk_tokens}",
-            source=book_file,
-            chunk_tokens=chunk_tokens,
-        )
-
-        work_dir = self.workspace_dir / book_file.stem
-        work_dir.mkdir(parents=True, exist_ok=True)
-        manifest = Manifest(text_name=book_file.stem, workspace=work_dir, kind="book")
-        manifest_file = work_dir / "manifest.json"
-        manifest_file.write_text(manifest.model_dump_json(indent=2))
-        logger.debug("book.workspace work_dir={work_dir}", work_dir=work_dir)
-
-        parts_dir = work_dir / "parts"
-        self._prepare_output_dir(parts_dir, stage="book.parts")
-
-        parts_payload = list(partition_text(book_file, chunk_tokens))
-        if not parts_payload:
-            raise ValueError("Partitioning produced no documents; check input file.")
-
-        for meta, content in parts_payload:
-            stem = f"{meta.text_name}-part{meta.part:03d}"
-            text_path = parts_dir / f"{stem}.txt"
-            json_path = parts_dir / f"{stem}.json"
-            text_path.write_text(content)
-            json_path.write_text(meta.model_dump_json(indent=2, exclude_none=True))
-            logger.debug(
-                "book.part_saved part={part} path={path}",
-                part=meta.part,
-                path=text_path,
-            )
-
-        logger.info(
-            "book.done work_dir={work_dir} parts={count}",
-            work_dir=work_dir,
-            count=len(parts_payload),
-        )
-        if auto:
-            self._run_full_pipeline(
-                work_dir,
-                voice_files=voice_files,
-                prepare_conditionals=prepare_conditionals,
-            )
-        return work_dir
-
-    def text(
-        self,
-        text_file: Path | str,
-        part: int = 1,
-        auto: bool = False,
-        voice_files: str = "default:enoch",
-        prepare_conditionals: bool = False,
-    ) -> Path:
-        """Register a single text file as parts/part{part:03d} in a new workspace."""
-        text_file = Path(text_file)
-        assert text_file.exists(), f"Text file {text_file} does not exist."
-        logger.info(
-            "text.start source={source} part={part}",
-            source=text_file,
-            part=part,
-        )
+        assert text_file.exists(), f"Book file {text_file} does not exist."
 
         work_dir = self.workspace_dir / text_file.stem
         work_dir.mkdir(parents=True, exist_ok=True)
-        manifest = Manifest(text_name=text_file.stem, workspace=work_dir, kind="text")
+        manifest = Manifest(text_name=text_file.stem, workspace=work_dir, kind="book")
         manifest_file = work_dir / "manifest.json"
         manifest_file.write_text(manifest.model_dump_json(indent=2))
-        logger.debug("text.workspace work_dir={work_dir}", work_dir=work_dir)
 
         parts_dir = work_dir / "parts"
-        self._prepare_output_dir(parts_dir, stage="text.parts")
+        self._prepare_output_dir(parts_dir, stage="partition")
 
-        content = text_file.read_text()
-        meta = PartMeta(
-            text_name=text_file.stem,
-            part=part,
-            source=str(text_file),
-            last_excerpt=None,
-            next_excerpt=None,
-        )
-        stem = f"{meta.text_name}-part{meta.part:03d}"
-        text_path = parts_dir / f"{stem}.txt"
-        json_path = parts_dir / f"{stem}.json"
-        text_path.write_text(content)
-        json_path.write_text(meta.model_dump_json(indent=2, exclude_none=True))
-        logger.debug(
-            "text.part_saved part={part} path={path}",
-            part=meta.part,
-            path=text_path,
-        )
-        logger.info(
-            "text.done work_dir={work_dir} parts=1",
-            work_dir=work_dir,
-        )
+        normalize_dir = work_dir / "normalize"
+        self._prepare_output_dir(normalize_dir, stage="normalize")
+        partition_text(text_file, normalize_dir, self.llm)
+
         if auto:
             self._run_full_pipeline(
                 work_dir,
@@ -488,99 +361,6 @@ class Toolchain:
                 prepare_conditionals=prepare_conditionals,
             )
         return work_dir
-
-    def normalize(self, work_dir: Path | str) -> None:
-        """Stage A — produce NormalizedOutput from parts/*.txt."""
-        workspace = self._resolve_workspace(work_dir)
-        parts_dir = workspace / "parts"
-        if not parts_dir.exists():
-            raise FileNotFoundError(f"Parts directory missing: {parts_dir}")
-
-        logger.info("normalize.start work_dir={work_dir}", work_dir=workspace)
-        normalize_dir = workspace / "normalize"
-        self._prepare_output_dir(normalize_dir, stage="normalize")
-
-        part_entries = self._iter_parts(parts_dir)
-        if not part_entries:
-            raise ValueError("No parts found to normalize.")
-
-        previous: Optional[NormalizedOutput] = None
-        for entry in part_entries:
-            prev_summary = (
-                previous.model_dump(exclude={"cleaned_text"}, exclude_unset=True)
-                if previous
-                else None
-            )
-            metadata_block = json.dumps(
-                {
-                    "text_name": entry.meta.text_name,
-                    "part": entry.meta.part,
-                    "source": entry.meta.source,
-                    "last_excerpt": entry.meta.last_excerpt,
-                    "next_excerpt": entry.meta.next_excerpt,
-                    "previous_normalized": prev_summary,
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
-            messages = [
-                SystemMessage(content=NORMALIZE_PROMPT),
-                HumanMessage(
-                    content=(
-                        "== METADATA ==\n"
-                        f"{metadata_block}\n\n"
-                        "== INPUT TEXT ==\n"
-                        f"{entry.text}"
-                    )
-                ),
-            ]
-            logger.info(
-                "normalize.part text_name={name} part={part} chars={chars}",
-                name=entry.meta.text_name,
-                part=entry.meta.part,
-                chars=len(entry.text),
-            )
-            callback = UsageMetadataCallbackHandler()
-            res = self.llm.with_structured_output(
-                NormalizedOutput, include_raw=True
-            ).invoke(messages, config=RunnableConfig(callbacks=[callback]))
-            normalized: NormalizedOutput = res["parsed"]
-            logger.debug(
-                "normalize.tokens usage={usage}", usage=callback.usage_metadata
-            )
-            stem = f"{entry.meta.text_name}-part{entry.meta.part:03d}-normalized"
-            text_path = normalize_dir / f"{stem}.txt"
-            json_path = normalize_dir / f"{stem}.json"
-            text_path.write_text(normalized.cleaned_text)
-            json_path.write_text(
-                normalized.model_dump_json(
-                    indent=2,
-                    exclude={"cleaned_text"},
-                    exclude_unset=True,
-                )
-            )
-
-            heuristics = normalized.heuristics
-            logger.debug(
-                (
-                    "normalize.heuristics input={input_chars} output={output_chars} "
-                    "removed={removed_chars} removal_ratio={ratio:.3f} paragraphs={paragraphs} "
-                    "speakers={speakers}"
-                ),
-                input_chars=heuristics.input_chars,
-                output_chars=heuristics.output_chars,
-                removed_chars=heuristics.removed_chars,
-                ratio=heuristics.removal_ratio,
-                paragraphs=heuristics.paragraph_count,
-                speakers=heuristics.speaker_candidate_count,
-            )
-            previous = normalized
-
-        logger.info(
-            "normalize.done work_dir={work_dir} parts={count}",
-            work_dir=workspace,
-            count=len(part_entries),
-        )
 
     def cue(self, work_dir: Path | str) -> None:
         """Stage B — produce CuedScript from normalize/*.json."""
