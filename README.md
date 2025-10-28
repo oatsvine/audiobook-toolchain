@@ -1,4 +1,4 @@
-# Audiobook Toolchain
+# Laban TTS
 
 *File-first audiobook synthesis workflow anchored in formal acting literature (Normalize → Cue → Synthesize).*
 
@@ -77,25 +77,25 @@ A **workspace** is a folder named after the source text (book or input file). Ev
 
 ```bash
 # 0) Initialize a workspace from an EPUB
-python -m audiobook_toolchain.book --book_file ~/in/GospelOfThomas.epub --chunk_tokens 3500
+python -m laban_tts.book --book_file ~/in/GospelOfThomas.epub --chunk_tokens 3500
 # -> creates: /data/workspace/tts/GospelOfThomas/{GospelOfThomas.epub,manifest.json,parts}
 
 # 1) Human edits the parts/*.txt
 
 # 2) Normalize (fails if normalize/ already exists unless --force)
-python -m audiobook_toolchain.normalize /data/workspace/tts/GospelOfThomas
+python -m laban_tts.normalize /data/workspace/tts/GospelOfThomas
 
 # 3) Cue from normalized outputs
-python -m audiobook_toolchain.cue /data/workspace/tts/GospelOfThomas
+python -m laban_tts.cue /data/workspace/tts/GospelOfThomas
 
 # 4) Synthesize audio with available voices
-python -m audiobook_toolchain.synthesize /data/workspace/tts/GospelOfThomas --prepare_conditionals=true
+python -m laban_tts.synthesize /data/workspace/tts/GospelOfThomas --prepare_conditionals=true
 
 # (Optional) finalize
-python -m audiobook_toolchain.finalize /data/workspace/tts/GospelOfThomas
+python -m laban_tts.finalize /data/workspace/tts/GospelOfThomas
 
 # ---- OR - run all at once:
-python -m audiobook_toolchain.book --book_file ~/in/GospelOfThomas.epub --auto
+python -m laban_tts.book --book_file ~/in/GospelOfThomas.epub --auto
 ```
 
 **Partial re-runs:**

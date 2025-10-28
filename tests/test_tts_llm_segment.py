@@ -1,11 +1,10 @@
-import json
 import os
 from pathlib import Path
 
 import pytest
 
-from audiobook_toolchain.cues import CuedScript
-from audiobook_toolchain.normalize import NormalizedOutput
+from laban_tts.cues import CuedScript
+from laban_tts.normalize import NormalizedBook, NormalizedOutput
 
 
 def _has_openai() -> bool:
@@ -70,7 +69,7 @@ def test_llm_segmentation_end_to_end(tmp_path: Path):
     - Uses thresholds to avoid flakiness while catching regressions.
     """
     from langchain_openai import ChatOpenAI
-    from audiobook_toolchain.workflow import Toolchain
+    from laban_tts.workflow import Toolchain
 
     # Prefer a widely available small model; allow override via env.
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
@@ -101,15 +100,12 @@ def test_llm_segmentation_end_to_end(tmp_path: Path):
 
     normalize_dir = work_dir / "normalize"
     assert normalize_dir.is_dir(), "Normalization stage did not produce directory"
-    normalized_json_path = next(normalize_dir.glob("*-normalized.json"), None)
-    assert normalized_json_path is not None, "Normalized JSON output missing"
-    normalized_text_path = normalized_json_path.with_suffix(".txt")
-    assert normalized_text_path.is_file(), "Normalized text output missing"
+    normalized_xml_path = next(normalize_dir.glob("*-normalized.xml"), None)
+    assert normalized_xml_path is not None, "Normalized XML output missing"
 
-    normalized_payload = json.loads(normalized_json_path.read_text())
-    normalized = NormalizedOutput.model_validate(
-        {**normalized_payload, "cleaned_text": normalized_text_path.read_text()}
-    )
+    normalized_book = NormalizedBook.from_xml(normalized_xml_path.read_text())
+    assert normalized_book.parts, "Normalized book contains no parts"
+    normalized: NormalizedOutput = normalized_book.parts[0].to_model(normalized_book.text_name)
     assert normalized.cleaned_text.strip(), "Cleaned text is empty"
     heuristics = normalized.heuristics
     assert heuristics.input_chars >= heuristics.output_chars > 0
@@ -140,7 +136,12 @@ def test_llm_segmentation_end_to_end(tmp_path: Path):
     assert script.speakers, "CuedScript speakers list is empty"
     assert set(script.speakers).issuperset({chunk.speaker for chunk in script.chunks})
 
-    serialized = script.to_xml(encoding="unicode", pretty_print=True, skip_empty=True)
+    serialized_raw = script.to_xml(
+        encoding="unicode", pretty_print=True, skip_empty=True
+    )
+    serialized = (
+        serialized_raw.decode("utf-8") if isinstance(serialized_raw, bytes) else serialized_raw
+    )
     round_tripped = CuedScript.from_xml(serialized)
     assert round_tripped.model_dump() == script.model_dump()
 
@@ -150,8 +151,11 @@ def test_llm_segmentation_end_to_end(tmp_path: Path):
     adjusted_script = round_tripped.model_copy(
         update={"chunks": [adjusted_first_chunk, *round_tripped.chunks[1:]]}
     )
-    adjusted_payload = adjusted_script.to_xml(
+    adjusted_raw = adjusted_script.to_xml(
         encoding="unicode", pretty_print=True, skip_empty=True
+    )
+    adjusted_payload = (
+        adjusted_raw.decode("utf-8") if isinstance(adjusted_raw, bytes) else adjusted_raw
     )
     adjusted_path = cue_dir / f"{normalized.text_name}-part{1:03d}-adjusted.xml"
     adjusted_path.write_text(adjusted_payload)

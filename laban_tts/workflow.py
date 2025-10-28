@@ -14,6 +14,8 @@ regenerate outputs.
 
 from __future__ import annotations
 
+# NOTE: Lazy imports are illegal.
+from unstructured.partition.auto import partition
 from langchain_core.runnables import RunnableConfig
 import json
 import os
@@ -125,7 +127,6 @@ def partition_text(
     path_or_url: Path | str, chunk_tokens: int = 5000
 ) -> Generator[Tuple[PartMeta, str], None, None]:
     """Read a local file or URL and yield (metadata, text) pairs for each part."""
-    from unstructured.partition.auto import partition  # lazy import to keep CLI snappy
 
     if isinstance(path_or_url, str) and path_or_url.startswith("http"):
         text_name = path_or_url.split("/")[-1].split(".")[0]

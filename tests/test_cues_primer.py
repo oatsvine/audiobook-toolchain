@@ -1,6 +1,6 @@
 import pytest
 
-from audiobook_toolchain.cues import (
+from laban_tts.cues import (
     CUE_PRIMER_TEXT,
     CuedChunk,
     CuedScript,
@@ -9,7 +9,7 @@ from audiobook_toolchain.cues import (
     Profile,
     RhetoricTag,
     TextType,
-    _ENGINE_PARAM_FIELD_LIMITS,
+    _ENGINE_PARAM_FIELD_LIMITS,  # type: ignore[reportPrivateUsage]
 )
 
 
@@ -25,6 +25,7 @@ def test_profile_rhetoric_combinations_stay_within_limits(
         text_type=TextType.TREATISE,
         rhetoric=rhetoric,
         profile=profile,
+        emphasis=[],
         pre_pause_ms=0,
         post_pause_ms=0,
     )
@@ -89,6 +90,7 @@ def test_cued_script_xml_roundtrip_and_mutation() -> None:
         text_type=TextType.DIALOGUE,
         rhetoric=RhetoricTag.deliberative,
         profile=Profile.Press,
+        emphasis=[],
     )
     script = CuedScript(
         text_name="gospel-of-mary",
@@ -96,7 +98,8 @@ def test_cued_script_xml_roundtrip_and_mutation() -> None:
         chunks=[chunk_one, chunk_two],
     )
 
-    xml_payload = script.to_xml(encoding="unicode", pretty_print=True, skip_empty=True)
+    xml_raw = script.to_xml(encoding="unicode", pretty_print=True, skip_empty=True)
+    xml_payload = xml_raw.decode("utf-8") if isinstance(xml_raw, bytes) else xml_raw
     assert "<cue-script" in xml_payload
     assert "<chunk idx=\"1\"" in xml_payload
 
@@ -110,7 +113,10 @@ def test_cued_script_xml_roundtrip_and_mutation() -> None:
         update={"chunks": [updated_chunk_one, *round_tripped.chunks[1:]]}
     )
 
-    updated_xml = updated_script.to_xml(encoding="unicode", pretty_print=True, skip_empty=True)
+    updated_raw = updated_script.to_xml(
+        encoding="unicode", pretty_print=True, skip_empty=True
+    )
+    updated_xml = updated_raw.decode("utf-8") if isinstance(updated_raw, bytes) else updated_raw
     reloaded = CuedScript.from_xml(updated_xml)
 
     assert reloaded.chunks[0].text == "Updated first chunk."

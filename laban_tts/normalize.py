@@ -1,41 +1,13 @@
+"""
+Partition texts and prepare a normalized output for audiobook cueing.
+"""
+
 from __future__ import annotations
 
 from enum import Enum
 from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
-
-# ---------- Categories ----------
-
-
-# ## Categorization framework (pinned defaults)
-
-# To cover “dialogue / narration / treatise / secondary” *and* remain faithful to classical/early‑modern practice, I combine:
-
-# * **Discourse form** (dialogic, narrative, didactic/expository, epistolary).
-# * **Rhetorical genus** (deliberative, judicial/forensic, epideictic), used as a *secondary* steering tag.
-
-# I’ll use these **TextType** buckets:
-
-# * **DIALOGUE** — philosophical or catechetical dialogue (Plato, Socratic, dialogues in patristic/ scholastic texts).
-# * **NARRATIVE\_PERSONAL** — autobiographical/confessional or inward narration (e.g., *Confessions*).
-# * **NARRATIVE\_HISTORICAL** — historiography, gospel‑style narrative, annals.
-# * **TREATISE** — systematic/didactic exposition (Aristotle, Epictetus handbook sections, early modern essays).
-# * **EPISTLE** — paraenetic/instructional letters and circular epistles.
-# * **SECONDARY\_EXPOSITION** — scholarly articles/summaries (e.g., SEP), commentaries.
-
-# **Pinned delivery defaults** (conservative to reduce “over‑acting”):
-
-# | TextType              | Laban‑derived Profile  | exaggeration | cfg\_weight (pace proxy) | temperature | Notes                                                   |
-# | --------------------- | ---------------------- | -----------: | -----------------------: | ----------: | ------------------------------------------------------- |
-# | DIALOGUE              | **Press** (probing)    |         0.66 |                     0.50 |        0.70 | Crisp interrogatives; add holds only at reveals.        |
-# | NARRATIVE\_PERSONAL   | **Float** (reflective) |         0.58 |                     0.45 |        0.72 | Softer movement, mild variety.                          |
-# | NARRATIVE\_HISTORICAL | **Glide** (steady)     |         0.60 |                     0.52 |        0.70 | Even pace; spike to Flick/Punch only for action chunks. |
-# | TREATISE              | **Dab** (precise)      |         0.62 |                     0.58 |        0.68 | Definitions land cleanly; restrained variation.         |
-# | EPISTLE               | **Press** (earnest)    |         0.64 |                     0.45 |        0.68 | Gentle deliberateness; longer cadences at appeals.      |
-# | SECONDARY\_EXPOSITION | **Glide** (neutral)    |         0.56 |                     0.52 |        0.65 | Scholarly clarity; least variation.                     |
-
-# (Rhetorical genus still appears as `rhetoric`: `deliberative`, `judicial`, `epideictic`, `didactic`, `narrative`, `lament` and can subtly bias defaults in your orchestration if you choose.)
 
 
 class TextType(str, Enum):
