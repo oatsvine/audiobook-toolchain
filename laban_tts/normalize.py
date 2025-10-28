@@ -3,106 +3,161 @@ Partition texts and prepare a normalized output for audiobook cueing.
 """
 
 from __future__ import annotations
+
+from enum import Enum
 from pathlib import Path
+from typing import Any, List, Optional, Sequence, Tuple, cast
+from urllib.parse import urlparse
 
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from loguru import logger
-from enum import Enum
-from typing import Generator, List, Optional, Tuple
-
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic_xml import BaseXmlModel, attr, element, wrapped
+from unstructured.documents.elements import Element
 from unstructured.partition.auto import partition
 
-
-# TODO: Serialize as XML (include content in <text> element) instead of JSON/text files.
-class PartMeta(BaseModel):
-    """Sidecar describing one text part produced during preparation."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    text_name: str = Field(min_length=1)
-    part: int = Field(ge=1)
-    source: str = Field(description="Original source path or URL for this part.")
-    last_excerpt: Optional[str] = Field(default=None)
-    next_excerpt: Optional[str] = Field(default=None)
+_PRIMARY_CHUNK_STRATEGY = "by_title"
+_FALLBACK_CHUNK_STRATEGY = "basic"
+_DEFAULT_MAX_CHARACTERS = 8000
+_EXCERPT_CHARS = 160
 
 
-class PartEntry(BaseModel):
-    """In-memory representation of a part ready for normalization."""
+# TODO: Helpers are inherently problematic. You must provide justification for each in their docstring. If you cannot justify confidently, the helper cannot exist.
+def _derive_text_name(path_or_url: Path | str) -> str:
+    if isinstance(path_or_url, Path):
+        return path_or_url.stem
+    candidate = str(path_or_url)
+    if candidate.startswith(("http://", "https://")):
+        parsed = urlparse(candidate)
+        name = Path(parsed.path).name or "document"
+        stem = Path(name).stem
+        return stem or "document"
+    return Path(candidate).stem or "document"
 
-    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    meta: PartMeta
-    text_path: Path
-    meta_path: Path
-    text: str
+# TODO: This is impossible to justify and must be removed.
+def _collapse_whitespace(value: str) -> str:
+    return " ".join(value.split())
 
 
-def partition_text(
-    path_or_url: Path,
-    parts_dir: Path,
-    chunk_tokens: int = 5000,
-) -> None:
-    """Read a local file or URL and yield (metadata, text) pairs for each part."""
+def _leading_excerpt(text: Optional[str]) -> Optional[str]:
+    if not text:
+        return None
+    collapsed = _collapse_whitespace(text)
+    if not collapsed:
+        return None
+    if len(collapsed) <= _EXCERPT_CHARS:
+        return collapsed
+    snippet = collapsed[:_EXCERPT_CHARS]
+    cutoff = snippet.rfind(" ")
+    if cutoff >= int(_EXCERPT_CHARS * 0.6):
+        snippet = snippet[:cutoff]
+    return snippet.rstrip() + "..."
 
-    if isinstance(path_or_url, str) and path_or_url.startswith("http"):
-        text_name = path_or_url.split("/")[-1].split(".")[0]
-        elements = partition(url=path_or_url)
-    else:
-        path = Path(path_or_url)
-        assert path.exists(), f"File {path} does not exist."
-        text_name = path.stem
-        elements = partition(filename=str(path.resolve()))
 
-    logger.info(
-        "Partitioned {count} elements from {source}",
-        count=len(elements),
-        source=path_or_url,
+# TODO: Forgiving programming is illegal. You must justify the need for it, and it cannot be any uncertainity about the XML content, as you fully control it.
+def _trailing_excerpt(text: Optional[str]) -> Optional[str]:
+    if not text:
+        return None
+    collapsed = _collapse_whitespace(text)
+    if not collapsed:
+        return None
+    if len(collapsed) <= _EXCERPT_CHARS:
+        return collapsed
+    snippet = collapsed[-_EXCERPT_CHARS:]
+    cutoff = snippet.find(" ")
+    if 0 <= cutoff <= int(_EXCERPT_CHARS * 0.4):
+        snippet = snippet[cutoff + 1 :]
+    return "..." + snippet.lstrip()
+
+
+# TODO: Highly suspicious. Remove.
+def _resolve_elements(
+    path_or_url: Path | str,
+    *,
+    chunking_strategy: str,
+    max_characters: int,
+) -> Tuple[str, List[Element]]:
+    text_name = _derive_text_name(path_or_url)
+    source = (
+        Path(path_or_url)
+        if not str(path_or_url).startswith(("http://", "https://"))
+        else None
     )
-    text = "\n\n".join([e.text for e in elements if e.text and e.text.strip()])
-
-    # TODO: Use unstructured canonical tools to partition by chapters/sections instead of langchain.
-    # TODO: To do this, clone the unstructured repo: https://github.com/Unstructured-IO/unstructured
-    # Explore and study test_unstructured carefully, starting with `partition` and `chunking`.
-    # Determine how to leverage unstructured's chunking capabilities to split by chapters/sections as reliably as possible.
-    # Check that you have the necessary dependencies installed for unstructured's chunking features, stop and ask user if you don't.
-    # Use ephemeral python script to experiment with unstructured's chunking features on sample texts.
-    # Use `corpus_texts` fixture to create test for this function that verifies correct chapter/section splitting.
-    part_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
-        model_name="gpt-4o",
-        chunk_size=chunk_tokens,
-        chunk_overlap=0,
-    )
-    excerpt_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=120,
-        chunk_overlap=0,
-        length_function=len,
-        is_separator_regex=False,
-    )
-
-    texts = part_splitter.split_text(text)
-    logger.info("Split into {count} parts", count=len(texts))
-    for idx, content in enumerate(texts, start=1):
-        meta = PartMeta(text_name=text_name, part=idx, source=str(path_or_url))
-        if idx > 1:
-            meta.last_excerpt = "…" + excerpt_splitter.split_text(texts[idx - 2])[-1]
-        if idx < len(texts):
-            meta.next_excerpt = excerpt_splitter.split_text(texts[idx])[:1][0] + "…"
-
-        # TODO: Must be a single XML, not txt/json
-        stem = f"{meta.text_name}-part{meta.part:03d}"
-        text_path = parts_dir / f"{stem}.txt"
-        json_path = parts_dir / f"{stem}.json"
-        text_path.write_text(content)
-        json_path.write_text(meta.model_dump_json(indent=2, exclude_none=True))
-        logger.debug(
-            "book.part_saved part={part} path={path}",
-            part=meta.part,
-            path=text_path,
+    if source is None:
+        elements = partition(
+            url=str(path_or_url),
+            chunking_strategy=chunking_strategy,
+            max_characters=max_characters,
         )
+    else:
+        assert source.exists(), f"File {source} does not exist."
+        elements = partition(
+            filename=str(source.resolve()),
+            chunking_strategy=chunking_strategy,
+            max_characters=max_characters,
+        )
+    return text_name, list(elements)
+
+
+def _collect_text_blocks(elements: Sequence[Element]) -> List[str]:
+    blocks: List[str] = []
+    for element in elements:
+        # TODO: Extremely illigal. Impossible to justify ever using getattr.
+        text = getattr(element, "text", "")
+        candidate = text.strip()
+        if candidate:
+            blocks.append(candidate)
+    return blocks
+
+
+# TODO: Very illegal. You can never justify this. Use pydantic properly.
+def _write_xml(path: Path, payload: str | bytes) -> None:
+    text = payload if isinstance(payload, str) else payload.decode("utf-8")
+    path.write_text(text)
+
+
+# TODO: Model properly to merge with TextPartMetadata. ONLY ONE MODEL PER ENTITY. Search and scrape pydantic_xml documentation for proper use.
+class TextPartDocument(BaseXmlModel, tag="text-part", skip_empty=True):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    text_name: str = attr(name="text-name")
+    part: int = attr(ge=1)
+    source: str = attr()
+    last_excerpt: Optional[str] = attr(name="last-excerpt", default=None)
+    next_excerpt: Optional[str] = attr(name="next-excerpt", default=None)
+    text: str = element(tag="text")
+
+    def metadata(self) -> "TextPartMetadata":
+        return TextPartMetadata.from_document(self)
+
+
+# TODO: Why does this exist? It cannot be correct. Do not wrap TextPartDocument and do not store `xml_path` in the model. It is irrelevant once deserialized.
+class PartEntry(BaseModel):
+    """In-memory representation of a partitioned text chunk."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
+
+    xml_path: Path
+    document: TextPartDocument
+
+    @property
+    def text_name(self) -> str:
+        return self.document.text_name
+
+    @property
+    def part(self) -> int:
+        return self.document.part
+
+    @property
+    def text(self) -> str:
+        return self.document.text
+
+    def metadata_document(self) -> "TextPartMetadata":
+        return self.document.metadata()
 
 
 class TextType(str, Enum):
@@ -170,6 +225,7 @@ class Heuristics(BaseModel):
     )
 
 
+# TODO: cast seems like an illegal workaround. Use attr or wrapped or supported pydantic_xml tags.
 class NormalizedOutput(BaseModel):
     """
     Stage A output: cleaned text you can pass to Stage B.
@@ -182,17 +238,225 @@ class NormalizedOutput(BaseModel):
     cleaned_text: str = Field(
         description="Narration-ready text with extraneous matter removed, normalized spacing/hyphenation/encoding."
     )
-    speakers: List[SpeakerGuess] = Field(
-        default_factory=list,
-        description="Candidate speakers found (if any); include 'narrator' when unknown.",
+    speakers: List[SpeakerGuess] = cast(
+        List[SpeakerGuess],
+        Field(
+            default_factory=list,
+            description="Candidate speakers found (if any); include 'narrator' when unknown.",
+        ),
     )
-    removed: List[RemovedItem] = Field(
-        default_factory=list,
-        description="All removed/non-spoken snippets for audit and reproducibility.",
+    removed: List[RemovedItem] = cast(
+        List[RemovedItem],
+        Field(
+            default_factory=list,
+            description="All removed/non-spoken snippets for audit and reproducibility.",
+        ),
     )
     heuristics: Heuristics = Field(
         description="Validation metrics to audit the cleaning step."
     )
+
+
+# TODO: Document what the purpose of this is. Detailed speaker identification is in scope of cues.py. What does the proposed normalized xml look like? Why not just attributes of <text>?
+class SpeakerGuessDocument(BaseXmlModel, tag="speaker", skip_empty=True):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = attr()
+    evidence: Optional[str] = element(tag="evidence", default=None)
+
+    @classmethod
+    def from_model(cls, speaker: SpeakerGuess) -> "SpeakerGuessDocument":
+        return cls(name=speaker.name, evidence=speaker.evidence)
+
+    def to_model(self) -> SpeakerGuess:
+        return SpeakerGuess(name=self.name, evidence=self.evidence)
+
+
+# TODO: I do not understand the intent here. Removed text elements should be inside <text> in the correct places following original text, not disjointed. A method of the pydantic class should allow clean text (filtering out inner elements like this).
+class RemovedItemDocument(BaseXmlModel, tag="removed", skip_empty=True):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: RemovedKind = attr()
+    text: str = element(tag="text")
+
+    @classmethod
+    def from_model(cls, item: RemovedItem) -> "RemovedItemDocument":
+        return cls(kind=item.kind, text=item.text)
+
+    def to_model(self) -> RemovedItem:
+        return RemovedItem(kind=self.kind, text=self.text)
+
+
+# TODO: Why is this an element and note attributes of <text>?
+class HeuristicsDocument(BaseXmlModel, tag="heuristics", skip_empty=True):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    input_chars: int = attr(name="input-chars")
+    output_chars: int = attr(name="output-chars")
+    removed_chars: int = attr(name="removed-chars")
+    removal_ratio: float = attr(name="removal-ratio")
+    paragraph_count: int = attr(name="paragraph-count")
+    speaker_candidate_count: int = attr(name="speaker-candidate-count")
+    likely_has_front_matter: Optional[bool] = attr(
+        name="likely-has-front-matter", default=None
+    )
+
+    @classmethod
+    def from_model(cls, heuristics: Heuristics) -> "HeuristicsDocument":
+        return cls(
+            input_chars=heuristics.input_chars,
+            output_chars=heuristics.output_chars,
+            removed_chars=heuristics.removed_chars,
+            removal_ratio=heuristics.removal_ratio,
+            paragraph_count=heuristics.paragraph_count,
+            speaker_candidate_count=heuristics.speaker_candidate_count,
+            likely_has_front_matter=heuristics.likely_has_front_matter,
+        )
+
+    def to_model(self) -> Heuristics:
+        return Heuristics(
+            input_chars=self.input_chars,
+            output_chars=self.output_chars,
+            removed_chars=self.removed_chars,
+            removal_ratio=self.removal_ratio,
+            paragraph_count=self.paragraph_count,
+            speaker_candidate_count=self.speaker_candidate_count,
+            likely_has_front_matter=self.likely_has_front_matter,
+        )
+
+
+# TODO: This kind of construction is always wrong. Never create unnecessary structure. There is not reason for more than one `Part` model.
+class TextPartMetadata(BaseXmlModel, tag="text-part-meta", skip_empty=True):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    text: str = element()
+    text_name: str = attr(name="text-name")
+    part: int = attr(ge=1)
+    source: str = attr()
+    last_excerpt: Optional[str] = attr(name="last-excerpt", default=None)
+    next_excerpt: Optional[str] = attr(name="next-excerpt", default=None)
+
+    @classmethod
+    def from_document(cls, document: TextPartDocument) -> "TextPartMetadata":
+        return cls(
+            text_name=document.text_name,
+            part=document.part,
+            source=document.source,
+            last_excerpt=document.last_excerpt,
+            next_excerpt=document.next_excerpt,
+        )
+
+
+# TODO: There is not such thing as a summary. Remove.
+class NormalizedSummaryDocument(
+    BaseXmlModel, tag="previous-normalized", skip_empty=True
+):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    text_name: str = attr(name="text-name")
+    part: int = attr(ge=1)
+    category: TextType = attr()
+    speakers: List[SpeakerGuessDocument] = wrapped(
+        "speakers",
+        element(tag="speaker", default_factory=list),
+    )
+    heuristics: HeuristicsDocument = element(tag="heuristics")
+
+
+# TODO: This is `NormalizedOutput` NEVER duplicate models. Learn to use pydantic_xml properly instead. Refactor all code accordingly.
+class NormalizedPartDocument(BaseXmlModel, tag="normalized-part", skip_empty=True):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    text_name: str = attr(name="text-name")
+    part: int = attr(ge=1)
+    category: TextType = attr()
+    text: str = element(tag="text")
+    speakers: List[SpeakerGuessDocument] = wrapped(
+        "speakers",
+        element(tag="speaker", default_factory=list),
+    )
+    removed: List[RemovedItemDocument] = wrapped(
+        "removed",
+        element(tag="item", default_factory=list),
+    )
+    heuristics: HeuristicsDocument = element(tag="heuristics")
+
+    def to_model(self) -> NormalizedOutput:
+        return NormalizedOutput(
+            text_name=self.text_name,
+            category=self.category,
+            cleaned_text=self.text,
+            speakers=[speaker.to_model() for speaker in self.speakers],
+            removed=[item.to_model() for item in self.removed],
+            heuristics=self.heuristics.to_model(),
+        )
+
+    @classmethod
+    def from_output(
+        cls, part: TextPartDocument, normalized: NormalizedOutput
+    ) -> "NormalizedPartDocument":
+        return cls(
+            text_name=normalized.text_name,
+            part=part.part,
+            category=normalized.category,
+            text=normalized.cleaned_text,
+            speakers=[SpeakerGuessDocument.from_model(s) for s in normalized.speakers],
+            removed=[
+                RemovedItemDocument.from_model(item) for item in normalized.removed
+            ],
+            heuristics=HeuristicsDocument.from_model(normalized.heuristics),
+        )
+
+    def to_summary_document(self) -> NormalizedSummaryDocument:
+        copied_speakers = [
+            SpeakerGuessDocument(name=speaker.name, evidence=speaker.evidence)
+            for speaker in self.speakers
+        ]
+        copied_heuristics = HeuristicsDocument.from_model(self.heuristics.to_model())
+        return NormalizedSummaryDocument(
+            text_name=self.text_name,
+            part=self.part,
+            category=self.category,
+            speakers=copied_speakers,
+            heuristics=copied_heuristics,
+        )
+
+
+# TODO: Remove an put medatate in the SINGLE normalized part model.
+class NormalizationMetadata(
+    BaseXmlModel, tag="normalization-metadata", skip_empty=True
+):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    part: TextPartMetadata = element(tag="part")
+    previous: Optional[NormalizedSummaryDocument] = element(
+        tag="previous-normalized", default=None
+    )
+
+
+# TODO: This abomination must not exist. Each normalized part XML must get deserialized, returning a list of the SINGLE "normalized part" model, and nothing more. XML path MUST NEVER BE INCLUDED IN MODELS.
+class NormalizedEntry(BaseModel):
+    """Normalized artifact persisted to disk."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
+
+    xml_path: Path
+    document: NormalizedPartDocument
+
+    @property
+    def text_name(self) -> str:
+        return self.document.text_name
+
+    @property
+    def part(self) -> int:
+        return self.document.part
+
+    @property
+    def normalized(self) -> NormalizedOutput:
+        return self.document.to_model()
+
+    def summary_document(self) -> NormalizedSummaryDocument:
+        return self.document.to_summary_document()
 
 
 NORMALIZE_PROMPT = """
@@ -215,37 +479,113 @@ Return JSON that conforms to the NormalizedOutput schema exactly.
 """
 
 
-def normalize(
-    part_entries: List[PartEntry], normalize_dir: Path, llm: ChatOpenAI
-) -> None:
-    """Stage A — produce NormalizedOutput from parts/*.txt."""
+def partition_text(
+    path_or_url: Path | str,
+    parts_dir: Path,
+    *,
+    chunking_strategy: str = _PRIMARY_CHUNK_STRATEGY,
+    max_characters: int = _DEFAULT_MAX_CHARACTERS,
+) -> List[PartEntry]:
+    """Partition a source document into XML parts stored under ``parts_dir``."""
 
-    previous: Optional[NormalizedOutput] = None
+    parts_dir.mkdir(parents=True, exist_ok=True)
+    text_name, elements = _resolve_elements(
+        path_or_url,
+        chunking_strategy=chunking_strategy,
+        max_characters=max_characters,
+    )
+    blocks = _collect_text_blocks(elements)
+    if len(blocks) <= 1 and chunking_strategy == _PRIMARY_CHUNK_STRATEGY:
+        logger.debug(
+            "partition.blocks_insufficient text_name={} strategy={}",
+            text_name,
+            chunking_strategy,
+        )
+        _, fallback_elements = _resolve_elements(
+            path_or_url,
+            chunking_strategy=_FALLBACK_CHUNK_STRATEGY,
+            max_characters=max_characters,
+        )
+        fallback_blocks = _collect_text_blocks(fallback_elements)
+        if len(fallback_blocks) > len(blocks):
+            logger.debug(
+                "partition.strategy_fallback text_name={} primary_chunks={} fallback_chunks={}",
+                text_name,
+                len(blocks),
+                len(fallback_blocks),
+            )
+            blocks = fallback_blocks
+    if not blocks:
+        raise ValueError("Partitioning produced no text blocks.")
+
+    entries: List[PartEntry] = []
+    for offset, content in enumerate(blocks):
+        idx = offset + 1
+        prev_text = blocks[offset - 1] if offset > 0 else None
+        next_text = blocks[offset + 1] if offset + 1 < len(blocks) else None
+        document = TextPartDocument(
+            text_name=text_name,
+            part=idx,
+            source=str(path_or_url),
+            last_excerpt=_trailing_excerpt(prev_text),
+            next_excerpt=_leading_excerpt(next_text),
+            text=content,
+        )
+        xml_path = parts_dir / f"{text_name}-part{idx:03d}.xml"
+        payload = document.to_xml(
+            encoding="unicode", pretty_print=True, skip_empty=True
+        )
+        _write_xml(xml_path, payload)
+        logger.debug("partition.part_saved path={} chars={}", xml_path, len(content))
+        entries.append(PartEntry(xml_path=xml_path, document=document))
+
+    logger.info(
+        "partition.done source={source} parts={parts}",
+        source=path_or_url,
+        parts=len(entries),
+    )
+    return entries
+
+
+def load_part_entries(parts_dir: Path) -> List[PartEntry]:
+    """Load partition outputs from disk into memory."""
+
+    entries: List[PartEntry] = []
+    for xml_path in sorted(parts_dir.glob("*.xml")):
+        document = TextPartDocument.from_xml(xml_path.read_text())
+        entries.append(PartEntry(xml_path=xml_path, document=document))
+    entries.sort(key=lambda entry: (entry.text_name, entry.part))
+    return entries
+
+
+def normalize_parts(
+    part_entries: Sequence[PartEntry],
+    normalize_dir: Path,
+    llm: ChatOpenAI,
+) -> List[NormalizedEntry]:
+    """Run normalization over partitioned parts, persist XML, and return entries."""
+
+    if not part_entries:
+        raise ValueError("No parts provided for normalization.")
+
+    normalize_dir.mkdir(parents=True, exist_ok=True)
+
+    results: List[NormalizedEntry] = []
+    previous_entry: Optional[NormalizedEntry] = None
     for entry in part_entries:
-        prev_summary = (
-            previous.model_dump(exclude={"cleaned_text"}, exclude_unset=True)
-            if previous
-            else None
-        )
-        # TODO: Must be xml
-        metadata_block = json.dumps(
-            {
-                "text_name": entry.meta.text_name,
-                "part": entry.meta.part,
-                "source": entry.meta.source,
-                "last_excerpt": entry.meta.last_excerpt,
-                "next_excerpt": entry.meta.next_excerpt,
-                "previous_normalized": prev_summary,
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
+        metadata_xml = NormalizationMetadata(
+            part=entry.metadata_document(),
+            previous=previous_entry.summary_document() if previous_entry else None,
+        ).to_xml(encoding="unicode", pretty_print=True, skip_empty=True)
+        if not isinstance(metadata_xml, str):
+            metadata_xml = metadata_xml.decode("utf-8")
+
         messages = [
             SystemMessage(content=NORMALIZE_PROMPT),
             HumanMessage(
                 content=(
                     "== METADATA ==\n"
-                    f"{metadata_block}\n\n"
+                    f"{metadata_xml}\n\n"
                     "== INPUT TEXT ==\n"
                     f"{entry.text}"
                 )
@@ -253,34 +593,37 @@ def normalize(
         ]
         logger.info(
             "normalize.part text_name={name} part={part} chars={chars}",
-            name=entry.meta.text_name,
-            part=entry.meta.part,
+            name=entry.text_name,
+            part=entry.part,
             chars=len(entry.text),
         )
         callback = UsageMetadataCallbackHandler()
-        res = llm.with_structured_output(NormalizedOutput, include_raw=True).invoke(
-            messages, config=RunnableConfig(callbacks=[callback])
+        structured_llm = cast(Any, llm).with_structured_output(
+            NormalizedOutput, include_raw=True
         )
-        normalized: NormalizedOutput = res["parsed"]
+        response = cast(
+            dict[str, object],
+            structured_llm.invoke(
+                messages, config=RunnableConfig(callbacks=[callback])
+            ),
+        )
+        normalized = cast(NormalizedOutput, response["parsed"])
         logger.debug("normalize.tokens usage={usage}", usage=callback.usage_metadata)
-        stem = f"{entry.meta.text_name}-part{entry.meta.part:03d}-normalized"
-        text_path = normalize_dir / f"{stem}.txt"
-        json_path = normalize_dir / f"{stem}.json"
-        text_path.write_text(normalized.cleaned_text)
-        json_path.write_text(
-            normalized.model_dump_json(
-                indent=2,
-                exclude={"cleaned_text"},
-                exclude_unset=True,
-            )
+
+        document = NormalizedPartDocument.from_output(entry.document, normalized)
+        xml_path = (
+            normalize_dir / f"{entry.text_name}-part{entry.part:03d}-normalized.xml"
         )
+        payload = document.to_xml(
+            encoding="unicode", pretty_print=True, skip_empty=True
+        )
+        _write_xml(xml_path, payload)
 
         heuristics = normalized.heuristics
         logger.debug(
             (
-                "normalize.heuristics input={input_chars} output={output_chars} "
-                "removed={removed_chars} removal_ratio={ratio:.3f} paragraphs={paragraphs} "
-                "speakers={speakers}"
+                "normalize.heuristics input={input_chars} output={output_chars} removed={removed_chars} "
+                "removal_ratio={ratio:.3f} paragraphs={paragraphs} speakers={speakers}"
             ),
             input_chars=heuristics.input_chars,
             output_chars=heuristics.output_chars,
@@ -289,4 +632,21 @@ def normalize(
             paragraphs=heuristics.paragraph_count,
             speakers=heuristics.speaker_candidate_count,
         )
-        previous = normalized
+
+        entry_out = NormalizedEntry(xml_path=xml_path, document=document)
+        results.append(entry_out)
+        previous_entry = entry_out
+
+    logger.info("normalize.done parts={count}", count=len(results))
+    return results
+
+
+def load_normalized_entries(normalize_dir: Path) -> List[NormalizedEntry]:
+    """Read normalized XML outputs from disk."""
+
+    entries: List[NormalizedEntry] = []
+    for xml_path in sorted(normalize_dir.glob("*-normalized.xml")):
+        document = NormalizedPartDocument.from_xml(xml_path.read_text())
+        entries.append(NormalizedEntry(xml_path=xml_path, document=document))
+    entries.sort(key=lambda entry: (entry.text_name, entry.part))
+    return entries

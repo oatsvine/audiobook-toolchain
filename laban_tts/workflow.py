@@ -15,7 +15,6 @@ regenerate outputs.
 from __future__ import annotations
 
 # NOTE: Lazy imports are illegal.
-from unstructured.partition.auto import partition
 from langchain_core.runnables import RunnableConfig
 import json
 import os
@@ -29,15 +28,15 @@ import fire
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
 from laban_tts.normalize import (
-    NORMALIZE_PROMPT,
-    NormalizedOutput,
     PartEntry,
-    PartMeta,
+    NormalizedEntry,
+    load_normalized_entries,
+    load_part_entries,
+    normalize_parts,
     partition_text,
 )
 from laban_tts.cues import CUE_PRIMER, CUE_PROMPT, CuedScript
@@ -51,10 +50,11 @@ tts_model = ChatterboxTTS.from_pretrained(
     device="cuda" if torch.cuda.is_available() else "cpu"
 )
 
+_TORCHAUDIO_BACKENDS = getattr(torchaudio, "list_audio_backends", lambda: [])()
 logger.info(
     "torchaudio.version={version} backends={backends}",
     version=torchaudio.__version__,
-    backends=torchaudio.list_audio_backends(),
+    backends=_TORCHAUDIO_BACKENDS,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -70,18 +70,6 @@ class Manifest(BaseModel):
     text_name: str
     workspace: Path
     kind: Literal["book"] = "book"
-
-
-class NormalizedEntry(BaseModel):
-    """Part material paired with normalization outputs."""
-
-    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
-
-    text_name: str
-    part: int
-    text_path: Path
-    json_path: Path
-    normalized: NormalizedOutput
 
 
 class CueEntry(BaseModel):
@@ -231,51 +219,6 @@ class Toolchain:
         text_name, part_str = base.rsplit("-part", 1)
         return text_name, int(part_str)
 
-    @staticmethod
-    def _iter_parts(parts_dir: Path) -> List[PartEntry]:
-        # TODO: Change to use XML
-        entries: List[PartEntry] = []
-        for text_path in sorted(parts_dir.glob("*.txt")):
-            meta_path = text_path.with_suffix(".json")
-            if not meta_path.exists():
-                raise FileNotFoundError(f"Metadata file missing for part: {meta_path}")
-            meta = PartMeta.model_validate_json(meta_path.read_text())
-            entries.append(
-                PartEntry(
-                    meta=meta,
-                    text_path=text_path,
-                    meta_path=meta_path,
-                    text=text_path.read_text(),
-                )
-            )
-        entries.sort(key=lambda entry: entry.meta.part)
-        return entries
-
-    def _iter_normalized(self, normalize_dir: Path) -> List[NormalizedEntry]:
-        # TODO: Change to use XML
-        entries: List[NormalizedEntry] = []
-        for json_path in sorted(normalize_dir.glob("*-normalized.json")):
-            text_path = json_path.with_suffix(".txt")
-            if not text_path.exists():
-                raise FileNotFoundError(f"Normalized text file missing: {text_path}")
-            text_name, part = self._parse_part_filename(json_path.stem, "-normalized")
-            payload = json.loads(json_path.read_text())
-            cleaned_text = text_path.read_text()
-            normalized = NormalizedOutput.model_validate(
-                {**payload, "cleaned_text": cleaned_text}
-            )
-            entries.append(
-                NormalizedEntry(
-                    text_name=text_name,
-                    part=part,
-                    text_path=text_path,
-                    json_path=json_path,
-                    normalized=normalized,
-                )
-            )
-        entries.sort(key=lambda entry: (entry.text_name, entry.part))
-        return entries
-
     def _iter_cues(self, cue_dir: Path) -> List[CueEntry]:
         entries: List[CueEntry] = []
         for xml_path in sorted(cue_dir.glob("*-cues.xml")):
@@ -302,9 +245,15 @@ class Toolchain:
         normalize_dir = workspace / "normalize"
         self._prepare_output_dir(normalize_dir, stage="normalize")
 
-        part_entries = self._iter_parts(parts_dir)
+        part_entries = load_part_entries(parts_dir)
         if not part_entries:
             raise ValueError("No parts found to normalize.")
+        normalized_entries = normalize_parts(part_entries, normalize_dir, self.llm)
+        logger.info(
+            "normalize.done work_dir={work_dir} parts={count}",
+            work_dir=workspace,
+            count=len(normalized_entries),
+        )
 
     def _run_full_pipeline(
         self,
@@ -352,7 +301,7 @@ class Toolchain:
 
         normalize_dir = work_dir / "normalize"
         self._prepare_output_dir(normalize_dir, stage="normalize")
-        partition_text(text_file, normalize_dir, self.llm)
+        partition_text(text_file, parts_dir)
 
         if auto:
             self._run_full_pipeline(
@@ -372,7 +321,7 @@ class Toolchain:
         cue_dir = workspace / "cues"
         self._prepare_output_dir(cue_dir, stage="cue")
 
-        normalized_entries = self._iter_normalized(normalize_dir)
+        normalized_entries = load_normalized_entries(normalize_dir)
         if not normalized_entries:
             raise ValueError("No normalized outputs found; run `normalize` first.")
 
@@ -545,7 +494,7 @@ class Toolchain:
                         top_p=params.top_p,
                     )
                     buf = BytesIO()
-                    torchaudio.save(buf, wav, sample_rate, format="wav")
+                    torchaudio.save(buf, wav, sample_rate, format="wav")  # type: ignore[arg-type]
                     buf.seek(0)
                     base_audio += AudioSegment.from_file(buf, format="wav")
                     spoken_phrases.append(clean_phrase)

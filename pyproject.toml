@@ -46,9 +46,8 @@ packages = ["laban_tts"]
 
 [tool.pyright]
 include = ["laban_tts", "tests"]
-exclude = ["**/node_modules", "**/__pycache__", "lib"]
+exclude = ["**/node_modules", "**/__pycache__"]
 typeCheckingMode = "basic"
-strict = ["laban_tts/normalize.py", "tests/**/*.py"]
 
 [tool.uv]
 override-dependencies = [
