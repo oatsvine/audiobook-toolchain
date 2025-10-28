@@ -16,7 +16,6 @@ from __future__ import annotations
 
 # NOTE: Lazy imports are illegal.
 from langchain_core.runnables import RunnableConfig
-import json
 import os
 import shutil
 import subprocess
@@ -30,12 +29,12 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic_xml import BaseXmlModel, attr, element, wrapped
 
 from laban_tts.normalize import (
-    PartEntry,
-    NormalizedEntry,
-    load_normalized_entries,
-    load_part_entries,
+    TextType,
+    load_normalized_parts,
+    load_parts,
     normalize_parts,
     partition_text,
 )
@@ -87,6 +86,21 @@ class ChunkEntry(BaseModel):
     duration: float
     position: float
     phrases: List[str]
+
+
+class CueRequest(BaseXmlModel, tag="cue-request", skip_empty=True):
+    """Metadata payload for cue generation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    text_name: str = attr(name="text-name")
+    part: int = attr(ge=1)
+    category: TextType = attr()
+    speakers: List[str] = wrapped(
+        "speakers",
+        element(tag="speaker", default_factory=list),
+    )
+    previous_script: Optional[CuedScript] = element(default=None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -245,71 +259,17 @@ class Toolchain:
         normalize_dir = workspace / "normalize"
         self._prepare_output_dir(normalize_dir, stage="normalize")
 
-        part_entries = load_part_entries(parts_dir)
-        if not part_entries:
+        parts = load_parts(parts_dir)
+        if not parts:
             raise ValueError("No parts found to normalize.")
-        normalized_entries = normalize_parts(part_entries, normalize_dir, self.llm)
+        normalized_entries = normalize_parts(parts, normalize_dir, self.llm)
         logger.info(
             "normalize.done work_dir={work_dir} parts={count}",
             work_dir=workspace,
             count=len(normalized_entries),
         )
 
-    def _run_full_pipeline(
-        self,
-        work_dir: Path | str,
-        voice_files: str,
-        prepare_conditionals: bool,
-    ) -> None:
-        workspace = self._resolve_workspace(work_dir)
-        logger.info("auto.pipeline.start work_dir={work_dir}", work_dir=workspace)
-        self.normalize(workspace)
-        self.cue(workspace)
-        self.synthesize(
-            workspace,
-            voice_files=voice_files,
-            prepare_conditionals=prepare_conditionals,
-        )
-        self.finalize(workspace)
-        logger.info("auto.pipeline.done work_dir={work_dir}", work_dir=workspace)
-
     # —————————————————— Stage commands ——————————————————
-
-    def run(
-        self,
-        text_file: Path | str = "",
-        auto: bool = False,
-        voice_files: str = "default:enoch",
-        prepare_conditionals: bool = False,
-    ) -> Path:
-        """Partition an EPUB, PDF, etc into workspace parts/ for subsequent stages."""
-        if not text_file:
-            text_file = self.choose_book()
-        else:
-            text_file = Path(text_file)
-
-        assert text_file.exists(), f"Book file {text_file} does not exist."
-
-        work_dir = self.workspace_dir / text_file.stem
-        work_dir.mkdir(parents=True, exist_ok=True)
-        manifest = Manifest(text_name=text_file.stem, workspace=work_dir, kind="book")
-        manifest_file = work_dir / "manifest.json"
-        manifest_file.write_text(manifest.model_dump_json(indent=2))
-
-        parts_dir = work_dir / "parts"
-        self._prepare_output_dir(parts_dir, stage="partition")
-
-        normalize_dir = work_dir / "normalize"
-        self._prepare_output_dir(normalize_dir, stage="normalize")
-        partition_text(text_file, parts_dir)
-
-        if auto:
-            self._run_full_pipeline(
-                work_dir,
-                voice_files=voice_files,
-                prepare_conditionals=prepare_conditionals,
-            )
-        return work_dir
 
     def cue(self, work_dir: Path | str) -> None:
         """Stage B — produce CuedScript from normalize/*.json."""
@@ -321,28 +281,23 @@ class Toolchain:
         cue_dir = workspace / "cues"
         self._prepare_output_dir(cue_dir, stage="cue")
 
-        normalized_entries = load_normalized_entries(normalize_dir)
+        normalized_entries = load_normalized_parts(normalize_dir)
         if not normalized_entries:
             raise ValueError("No normalized outputs found; run `normalize` first.")
 
         previous_script: Optional[CuedScript] = None
         for entry in normalized_entries:
-            prev_summary = (
-                previous_script.model_dump(exclude={"chunks"}, exclude_unset=True)
-                if previous_script
-                else None
+            metadata = CueRequest(
+                text_name=entry.text_name,
+                part=entry.part,
+                category=entry.category,
+                speakers=entry.speaker_names(),
+                previous_script=previous_script,
             )
-            metadata_block = json.dumps(
-                {
-                    "text_name": entry.text_name,
-                    "part": entry.part,
-                    "category": entry.normalized.category,
-                    "speakers": [speaker.name for speaker in entry.normalized.speakers],
-                    "previous_script": prev_summary,
-                },
-                ensure_ascii=False,
-                indent=2,
+            metadata_block = metadata.to_xml(
+                encoding="unicode", pretty_print=True, skip_empty=True
             )
+            assert isinstance(metadata_block, str)
             messages = [
                 SystemMessage(content=CUE_PRIMER),
                 SystemMessage(content=CUE_PROMPT),
@@ -351,7 +306,7 @@ class Toolchain:
                         "== CONTEXT ==\n"
                         f"{metadata_block}\n\n"
                         "== CLEANED TEXT ==\n"
-                        f"{entry.normalized.cleaned_text}"
+                        f"{entry.cleaned_text()}"
                     )
                 ),
             ]
@@ -382,7 +337,7 @@ class Toolchain:
             assert isinstance(xml_payload, str)
             xml_path.write_text(xml_payload)
 
-            norm_len = len(entry.normalized.cleaned_text)
+            norm_len = len(entry.cleaned_text())
             chunk_len = sum(len(chunk.text) for chunk in script.chunks)
             coverage = chunk_len / max(1, norm_len)
             logger.debug(
@@ -547,6 +502,44 @@ class Toolchain:
             work_dir=workspace,
             count=len(wav_files),
         )
+
+    def run(
+        self,
+        text_file: Path | str = "",
+        auto: bool = False,
+        voice_files: str = "default:enoch",
+        prepare_conditionals: bool = False,
+    ) -> Path:
+        """Partition an EPUB, PDF, etc into workspace parts/ for subsequent stages."""
+        if not text_file:
+            text_file = self.choose_book()
+        else:
+            text_file = Path(text_file)
+
+        assert text_file.exists(), f"Book file {text_file} does not exist."
+
+        work_dir = self.workspace_dir / text_file.stem
+        work_dir.mkdir(parents=True, exist_ok=True)
+        manifest = Manifest(text_name=text_file.stem, workspace=work_dir, kind="book")
+        manifest_file = work_dir / "manifest.json"
+        manifest_file.write_text(manifest.model_dump_json(indent=2))
+
+        parts_dir = work_dir / "parts"
+        self._prepare_output_dir(parts_dir, stage="parts")
+        partition_text(text_file, parts_dir)
+
+        if auto:
+            logger.info("auto.pipeline.start work_dir={work_dir}", work_dir=work_dir)
+            self.normalize(work_dir)
+            self.cue(work_dir)
+            self.synthesize(
+                work_dir,
+                voice_files=voice_files,
+                prepare_conditionals=prepare_conditionals,
+            )
+            self.finalize(work_dir)
+            logger.info("auto.pipeline.done work_dir={work_dir}", work_dir=work_dir)
+        return work_dir
 
 
 if __name__ == "__main__":

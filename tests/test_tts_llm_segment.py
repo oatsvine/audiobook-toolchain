@@ -1,13 +1,15 @@
-# pyright: ignore-file
-
 import os
 from pathlib import Path
 
 import pytest
 
+from laban_tts.cues import CuedScript
+from laban_tts.normalize import load_normalized_parts, load_parts
+
 # NOTE: kept for runtime execution; pyright ignored for this file.
 
 
+# TODO: Illegal wrapper
 def _has_openai() -> bool:
     return bool(os.environ.get("OPENAI_API_KEY"))
 
@@ -70,6 +72,9 @@ def test_llm_segmentation_end_to_end(tmp_path: Path):
     - Uses thresholds to avoid flakiness while catching regressions.
     """
     from langchain_openai import ChatOpenAI
+
+    pytest.importorskip("chatterbox.tts", reason="Requires chatterbox TTS dependency")
+
     from laban_tts.workflow import Toolchain
 
     # Prefer a widely available small model; allow override via env.
@@ -94,14 +99,86 @@ def test_llm_segmentation_end_to_end(tmp_path: Path):
         voices_dir=voices_dir,
     )
 
-    work_dir = tts.text(text_file, part=1)
+    work_dir = tts.run(text_file=text_file)
     assert work_dir.is_dir()
-    assert (work_dir / text_file.name).is_file()
+    parts_dir = work_dir / "parts"
+    assert parts_dir.is_dir(), "Partition stage did not create parts/"
+    part_files = list(parts_dir.glob("*.xml"))
+    assert part_files, "Partition stage wrote no XML parts"
+
     tts.normalize(work_dir)
 
     normalize_dir = work_dir / "normalize"
     assert normalize_dir.is_dir(), "Normalization stage did not produce directory"
-    normalized_xml_path = next(normalize_dir.glob("*-normalized.xml"), None)
-    assert normalized_xml_path is not None, "Normalized XML output missing"
+    normalized_entries = load_normalized_parts(normalize_dir)
+    assert normalized_entries, "No normalized entries reloaded"
 
-    # TODO: continue test
+    tts.cue(work_dir)
+
+    cue_dir = work_dir / "cues"
+    assert cue_dir.is_dir(), "Cue stage did not produce directory"
+    cue_xml_path = next(cue_dir.glob("*-cues.xml"), None)
+    assert cue_xml_path is not None, "Cue XML output missing"
+
+    script = CuedScript.from_xml(cue_xml_path.read_text())
+    assert script.chunks, "Cue script missing chunks"
+    assert script.speakers, "Cue script speaker registry empty"
+
+    parts = {
+        (part.text_name, part.part): part
+        for part in load_parts(parts_dir)
+    }
+
+    normalized = normalized_entries[0]
+    cleaned_text = normalized.cleaned_text()
+    chunk_chars = sum(len(chunk.text) for chunk in script.chunks)
+    coverage_ratio = chunk_chars / max(1, len(cleaned_text))
+    assert coverage_ratio > 0.5, "Cue chunks cover insufficient normalized text"
+
+    part = parts[(normalized.text_name, normalized.part)]
+    measured_input_chars = len(part.content)
+    assert (
+        measured_input_chars > 0
+    ), "Original partition produced empty content"
+
+    removed_from_fragments = sum(
+        len(fragment.content)
+        for fragment in normalized.fragments
+        if fragment.role == "removed"
+    )
+    expected_removed = max(normalized.input_chars - normalized.output_chars, 0)
+    measured_removed_chars = (
+        removed_from_fragments if removed_from_fragments > 0 else expected_removed
+    )
+    if measured_removed_chars == 0:
+        assert normalized.removed_chars == 0
+        assert normalized.removal_ratio == 0
+    else:
+        removed_delta = abs(normalized.removed_chars - measured_removed_chars)
+        assert (
+            removed_delta <= 0.15 * measured_removed_chars
+        ), "removed_chars diverges beyond 15% tolerance"
+
+        measured_ratio = measured_removed_chars / max(1, normalized.input_chars)
+        ratio_delta = abs(normalized.removal_ratio - measured_ratio)
+        assert (
+            ratio_delta <= 0.15 * measured_ratio
+        ), "removal_ratio diverges beyond 15% tolerance"
+
+    chunk_speakers = {chunk.speaker for chunk in script.chunks}
+    assert chunk_speakers.issubset(set(script.speakers)), "Chunk speaker not registered"
+
+    profiles = {chunk.profile for chunk in script.chunks}
+    rhetorics = {chunk.rhetoric for chunk in script.chunks}
+    assert profiles, "Missing delivery profiles"
+    assert rhetorics, "Missing rhetoric tags"
+
+    audio_dir = work_dir / "audio"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    first_chunk = script.chunks[0]
+    audio_stub = (
+        audio_dir
+        / f"{normalized.text_name}_p{normalized.part:03d}_{first_chunk.idx:04d}_{first_chunk.speaker}.wav"
+    )
+    audio_stub.write_bytes(b"")
+    tts.finalize(work_dir)
