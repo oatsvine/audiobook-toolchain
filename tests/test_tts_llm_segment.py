@@ -124,10 +124,7 @@ def test_llm_segmentation_end_to_end(tmp_path: Path):
     assert script.chunks, "Cue script missing chunks"
     assert script.speakers, "Cue script speaker registry empty"
 
-    parts = {
-        (part.text_name, part.part): part
-        for part in load_parts(parts_dir)
-    }
+    parts = {(part.text_name, part.part): part for part in load_parts(parts_dir)}
 
     normalized = normalized_entries[0]
     cleaned_text = normalized.cleaned_text()
@@ -137,9 +134,7 @@ def test_llm_segmentation_end_to_end(tmp_path: Path):
 
     part = parts[(normalized.text_name, normalized.part)]
     measured_input_chars = len(part.content)
-    assert (
-        measured_input_chars > 0
-    ), "Original partition produced empty content"
+    assert measured_input_chars > 0, "Original partition produced empty content"
 
     removed_from_fragments = sum(
         len(fragment.content)

@@ -44,10 +44,25 @@ import torch
 import torchaudio  # type: ignore[import]
 from chatterbox.tts import ChatterboxTTS  # type: ignore[import]
 from pydub import AudioSegment
+import soundfile as sf
 
-tts_model = ChatterboxTTS.from_pretrained(
-    device="cuda" if torch.cuda.is_available() else "cpu"
-)
+
+def _load_tts_model() -> ChatterboxTTS:
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    try:
+        return ChatterboxTTS.from_pretrained(device=device)
+    except RuntimeError as exc:  # pragma: no cover - import-time guard
+        message = str(exc)
+        if device == "cuda" and "out of memory" in message.lower():
+            logger.warning(
+                "tts.load_cuda_failed falling back to CPU due to OOM",
+            )
+            torch.cuda.empty_cache()
+            return ChatterboxTTS.from_pretrained(device="cpu")
+        raise
+
+
+tts_model = _load_tts_model()
 
 _TORCHAUDIO_BACKENDS = getattr(torchaudio, "list_audio_backends", lambda: [])()
 logger.info(
@@ -129,6 +144,18 @@ class Toolchain:
         model_name: str = "gpt-5-mini",
         language_id: Optional[str] = None,
     ) -> None:
+        """Initialize directories, execution flags, and the backing LLM client.
+
+        Args:
+            debug: Enable verbose logging for manual runs.
+            in_dir: Root directory holding input documents.
+            voices_dir: Directory containing reference voice WAV files.
+            workspace_dir: Base output directory for derived artifacts.
+            force: Whether to overwrite existing stage directories.
+            llm: Optional preconfigured language model client for cueing.
+            model_name: OpenAI model identifier used when `llm` is omitted.
+            language_id: Optional locale hint propagated to downstream stages.
+        """
         self.debug = debug
         self.force = force
         self.language_id = language_id
@@ -147,7 +174,15 @@ class Toolchain:
     # —————————————————— Utilities ——————————————————
 
     def voices_from_spec(self, voice_specs: Sequence[str]) -> Dict[str, Path]:
-        """Map speaker:name specs to voice files in `voices_dir`."""
+        """Resolve `speaker:voice` specs to WAV files under `voices_dir`.
+
+        Args:
+            voice_specs: Iterable of `speaker:voice_name` entries that may
+                include a `default` key.
+
+        Returns:
+            Mapping from normalized speaker identifiers to existing WAV paths.
+        """
         voices: Dict[str, Path] = {}
         for spec in voice_specs:
             if not spec:
@@ -161,7 +196,7 @@ class Toolchain:
         return voices
 
     def voice_file(self, voice_name: str) -> Path:
-        """Resolve a voice WAV path and assert existence."""
+        """Return the absolute WAV path for a named reference voice sample."""
         voice_file = self.voices_dir / f"{voice_name}.wav"
         assert voice_file.exists(), f"Voice file {voice_file} does not exist."
         return voice_file
@@ -181,7 +216,14 @@ class Toolchain:
         return None, None
 
     def choose_book(self) -> Path:
-        """Interactive selection of an EPUB from input directory using `sk`."""
+        """Use `sk` to choose an EPUB/PDF from the input directory.
+
+        Returns:
+            Absolute path to the selected source file under `in_dir`.
+
+        Raises:
+            ValueError: If the input directory does not contain any book files.
+        """
         books = list(self.in_dir.rglob("*.epub")) + list(self.in_dir.rglob("*.pdf"))
         if not books:
             raise ValueError("No book files found in the input directory.")
@@ -250,7 +292,15 @@ class Toolchain:
         return entries
 
     def normalize(self, workspace: Path) -> None:
-        """Stage A — produce NormalizedOutput from parts/*.txt."""
+        """Generate normalized JSON artifacts from `parts/` inputs.
+
+        Args:
+            workspace: Target workspace containing a populated `parts` directory.
+
+        Raises:
+            FileNotFoundError: If the `parts` directory is missing.
+            ValueError: If no part files are available to normalize.
+        """
         parts_dir = workspace / "parts"
         if not parts_dir.exists():
             raise FileNotFoundError(f"Parts directory missing: {parts_dir}")
@@ -272,7 +322,17 @@ class Toolchain:
     # —————————————————— Stage commands ——————————————————
 
     def cue(self, work_dir: Path | str) -> None:
-        """Stage B — produce CuedScript from normalize/*.json."""
+        """Derive structured cue scripts (`cues/`) from normalized parts.
+
+        Args:
+            work_dir: Absolute or relative workspace identifier with
+                `normalize` outputs.
+
+        Raises:
+            FileNotFoundError: If the workspace or normalized artifacts are
+                missing.
+            ValueError: If no normalized entries were produced by Stage A.
+        """
         workspace = self._resolve_workspace(work_dir)
         normalize_dir = workspace / "normalize"
         if not normalize_dir.exists():
@@ -367,7 +427,19 @@ class Toolchain:
         voice_files: str = "default:enoch",
         prepare_conditionals: bool = False,
     ) -> None:
-        """Stage C — synthesize audio for each chunk in cues/*.xml."""
+        """Render WAV audio for every cue chunk using chatterbox-tts.
+
+        Args:
+            work_dir: Workspace name or path containing cue XML artifacts.
+            voice_files: Comma-separated `speaker:voice` hints used to resolve
+                reference voices.
+            prepare_conditionals: Whether to prime the TTS model with the
+                default voice before chunk synthesis.
+
+        Raises:
+            FileNotFoundError: If the cue directory is missing.
+            ValueError: If no cue scripts are available.
+        """
         workspace = self._resolve_workspace(work_dir)
         cue_dir = workspace / "cues"
         if not cue_dir.exists():
@@ -448,10 +520,20 @@ class Toolchain:
                         min_p=params.min_p,
                         top_p=params.top_p,
                     )
+                    waveform = wav.detach().cpu()
+                    if waveform.ndim == 1:
+                        samples = waveform.unsqueeze(1).contiguous().numpy()
+                    elif waveform.ndim == 2:
+                        samples = waveform.transpose(0, 1).contiguous().numpy()
+                    else:  # pragma: no cover - defensive guard
+                        raise ValueError(
+                            f"Unexpected waveform shape: {tuple(waveform.shape)}"
+                        )
                     buf = BytesIO()
-                    torchaudio.save(buf, wav, sample_rate, format="wav")  # type: ignore[arg-type]
+                    sf.write(buf, samples, sample_rate, format="WAV")
                     buf.seek(0)
                     base_audio += AudioSegment.from_file(buf, format="wav")
+                    buf.close()
                     spoken_phrases.append(clean_phrase)
 
                 if chunk.post_pause_ms:
@@ -486,7 +568,14 @@ class Toolchain:
         )
 
     def finalize(self, work_dir: Path | str) -> None:
-        """Reserved for concatenation/mix; currently just logs existing assets."""
+        """Log the inventory of synthesized audio as a placeholder final stage.
+
+        Args:
+            work_dir: Workspace name or path with a populated `audio` directory.
+
+        Raises:
+            FileNotFoundError: If synthesized audio assets are not present.
+        """
         workspace = self._resolve_workspace(work_dir)
         audio_dir = workspace / "audio"
         if not audio_dir.exists():
@@ -510,7 +599,17 @@ class Toolchain:
         voice_files: str = "default:enoch",
         prepare_conditionals: bool = False,
     ) -> Path:
-        """Partition an EPUB, PDF, etc into workspace parts/ for subsequent stages."""
+        """Create a workspace from a source document and optionally run stages.
+
+        Args:
+            text_file: Source document path; prompts for selection when empty.
+            auto: Whether to execute normalize → cue → synthesize → finalize.
+            voice_files: Voice selection string forwarded to `synthesize`.
+            prepare_conditionals: Pass-through flag for conditional preparation.
+
+        Returns:
+            Workspace directory created for the supplied text file.
+        """
         if not text_file:
             text_file = self.choose_book()
         else:

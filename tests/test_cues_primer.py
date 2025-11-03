@@ -101,7 +101,7 @@ def test_cued_script_xml_roundtrip_and_mutation() -> None:
     xml_raw = script.to_xml(encoding="unicode", pretty_print=True, skip_empty=True)
     xml_payload = xml_raw.decode("utf-8") if isinstance(xml_raw, bytes) else xml_raw
     assert "<cue-script" in xml_payload
-    assert "<chunk idx=\"1\"" in xml_payload
+    assert '<chunk idx="1"' in xml_payload
 
     round_tripped = CuedScript.from_xml(xml_payload)
     assert round_tripped.model_dump() == script.model_dump()
@@ -116,7 +116,9 @@ def test_cued_script_xml_roundtrip_and_mutation() -> None:
     updated_raw = updated_script.to_xml(
         encoding="unicode", pretty_print=True, skip_empty=True
     )
-    updated_xml = updated_raw.decode("utf-8") if isinstance(updated_raw, bytes) else updated_raw
+    updated_xml = (
+        updated_raw.decode("utf-8") if isinstance(updated_raw, bytes) else updated_raw
+    )
     reloaded = CuedScript.from_xml(updated_xml)
 
     assert reloaded.chunks[0].text == "Updated first chunk."
