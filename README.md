@@ -27,7 +27,7 @@ print('torch', torch.__version__, 'cuda', torch.cuda.is_available())
 PY
 ```
 
-Project dependencies now include `soundfile`; no separate TorchCodec install is required.
+Project depends on `torchaudio`; install TorchCodec if your environment lacks the built-in encoder support.
 
 ## Workspace Layout
 
@@ -65,9 +65,9 @@ Voice references are resolved from `$WORKSPACE_DIR/voices/` (e.g., `voices/enoch
 | Stage | Command | Inputs | Outputs | Notes |
 | --- | --- | --- | --- | --- |
 | `parts` | `run` (without `--auto`) | Source text | `parts/*.xml` | Partitioned slices sized for LLM context. |
-| `normalize` | `normalize <workspace>` | `parts/*.xml` | `normalize/*-normalized.xml` | Cleans text, classifies speakers + discourse. |
-| `cue` | `cue <workspace>` | `normalize/*.xml` | `cues/*-cues.xml` | LLM produces chunk, rhetoric, profile, emphasis metadata. |
-| `synthesize` | `synthesize <workspace>` | `cues/*.xml`, voice WAVs | `audio/*.wav` + `.json` | Uses chatterbox-tts; handles GPU OOM with CPU fallback. |
+| `normalize` | `normalize <workspace>` | `parts/*.xml` | `normalize/*-normalized.xml` | Cleans text, classifies speakers + discourse; skips existing files unless `--force`. |
+| `cue` | `cue <workspace>` | `normalize/*.xml` | `cues/*-cues.xml` | LLM produces chunk, rhetoric, profile, emphasis metadata; reuses existing scripts unless `--force`. |
+| `synthesize` | `synthesize <workspace>` | `cues/*.xml`, voice WAVs | `audio/*.wav` + `.json` | Uses chatterbox-tts; reuses existing audio unless `--force`; handles GPU OOM with CPU fallback. |
 | `finalize` | `finalize <workspace>` | `audio/*.wav` | Logs inventory | Placeholder for later concatenation/mixing. |
 
 Invoke stages individually:

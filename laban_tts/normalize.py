@@ -324,6 +324,8 @@ def normalize_parts(
     parts: Sequence[TextPart],
     normalize_dir: Path,
     llm: ChatOpenAI,
+    *,
+    force: bool = False,
 ) -> List[NormalizedPart]:
     """Run normalization over partitioned parts, persist XML, and return documents."""
 
@@ -334,6 +336,36 @@ def normalize_parts(
 
     results: List[NormalizedPart] = []
     for part in parts:
+        xml_path = (
+            normalize_dir / f"{part.text_name}-part{part.part:03d}-normalized.xml"
+        )
+        if xml_path.exists() and not force:
+            logger.info(
+                "normalize.skip_existing text_name={name} part={part}",
+                name=part.text_name,
+                part=part.part,
+            )
+            persisted = NormalizedPart.from_xml(xml_path.read_text())
+            sanitized_existing = _sanitize_normalized_part(persisted)
+            if sanitized_existing is not persisted:
+                logger.warning(
+                    "normalize.sanitized_existing text_name={name} part={part}",
+                    name=part.text_name,
+                    part=part.part,
+                )
+                existing_payload = sanitized_existing.to_xml(
+                    encoding="unicode", pretty_print=True, skip_empty=True
+                )
+                existing_payload_str = (
+                    existing_payload
+                    if isinstance(existing_payload, str)
+                    else existing_payload.decode()
+                )
+                xml_path.write_text(existing_payload_str)
+                persisted = sanitized_existing
+            results.append(persisted)
+            continue
+
         metadata_xml = NormalizeRequest(
             text_name=part.text_name,
             part=part.part,
@@ -380,14 +412,15 @@ def normalize_parts(
         assert normalized.fragments, "Normalized fragments missing."
         logger.debug("normalize.tokens usage={usage}", usage=callback.usage_metadata)
 
-        xml_path = (
-            normalize_dir / f"{part.text_name}-part{part.part:03d}-normalized.xml"
-        )
-        persisted = normalized.to_xml(
+        persisted_payload = normalized.to_xml(
             encoding="unicode", pretty_print=True, skip_empty=True
         )
-        assert isinstance(persisted, str)
-        xml_path.write_text(persisted)
+        persisted_payload_str = (
+            persisted_payload
+            if isinstance(persisted_payload, str)
+            else persisted_payload.decode()
+        )
+        xml_path.write_text(persisted_payload_str)
 
         logger.debug(
             (

@@ -23,7 +23,6 @@ dependencies = [
   "tiktoken",
   "unstructured[md]",
   "pydub",
-  "soundfile",
 ]
 
 [project.optional-dependencies]

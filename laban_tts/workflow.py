@@ -33,7 +33,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from loguru import logger
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 from pydantic_xml import BaseXmlModel, attr, element, wrapped
 from pydub import AudioSegment
 
@@ -237,17 +237,23 @@ class Toolchain:
     def _prepare_output_dir(self, path: Path, stage: str) -> None:
         """Ensure an output directory is writable, honoring the `--force` policy."""
         if path.exists():
-            if not self.force:
+            if not path.is_dir():
                 raise FileExistsError(
-                    f"Stage {stage} refuses to overwrite existing directory: {path}"
+                    f"Stage {stage} encountered a non-directory path: {path}"
                 )
-            logger.warning(
-                "Overwriting existing directory for stage {stage}: {path}",
-                stage=stage,
-                path=path,
-            )
-            shutil.rmtree(path)
-        path.mkdir(parents=True, exist_ok=True)
+            if self.force:
+                logger.warning(
+                    "Overwriting existing directory for stage {stage}: {path}",
+                    stage=stage,
+                    path=path,
+                )
+                shutil.rmtree(path)
+                path.mkdir(parents=True, exist_ok=True)
+            else:
+                # Directory already exists; reuse for incremental processing.
+                return
+        else:
+            path.mkdir(parents=True, exist_ok=True)
 
     def _resolve_workspace(self, work_dir: Path | str) -> Path:
         """Resolve a workspace path, accepting relative names under `workspace_dir`."""
@@ -312,7 +318,9 @@ class Toolchain:
         parts = load_parts(parts_dir)
         if not parts:
             raise ValueError("No parts found to normalize.")
-        normalized_entries = normalize_parts(parts, normalize_dir, self.llm)
+        normalized_entries = normalize_parts(
+            parts, normalize_dir, self.llm, force=self.force
+        )
         logger.info(
             "normalize.done work_dir={work_dir} parts={count}",
             work_dir=workspace,
@@ -347,6 +355,17 @@ class Toolchain:
 
         previous_script: Optional[CuedScript] = None
         for entry in normalized_entries:
+            stem = f"{entry.text_name}-part{entry.part:03d}-cues"
+            xml_path = cue_dir / f"{stem}.xml"
+            if xml_path.exists() and not self.force:
+                logger.info(
+                    "cue.skip_existing text_name={name} part={part}",
+                    name=entry.text_name,
+                    part=entry.part,
+                )
+                script = CuedScript.from_xml(xml_path.read_text())
+                previous_script = script
+                continue
             metadata = CueRequest(
                 text_name=entry.text_name,
                 part=entry.part,
@@ -389,8 +408,6 @@ class Toolchain:
                 script = script.model_copy(update={"speakers": merged_speakers})
                 logger.debug("cue.speakers merged={speakers}", speakers=merged_speakers)
 
-            stem = f"{entry.text_name}-part{entry.part:03d}-cues"
-            xml_path = cue_dir / f"{stem}.xml"
             xml_payload = script.to_xml(
                 encoding="unicode", pretty_print=True, skip_empty=True
             )
@@ -500,6 +517,26 @@ class Toolchain:
                     audio_dir
                     / f"{entry.text_name}_p{entry.part:03d}_{chunk.idx:04d}_{chunk.speaker}.wav"
                 )
+                meta_path = out_file.with_suffix(".json")
+                if out_file.exists() and not self.force:
+                    logger.info(
+                        "synthesize.skip_existing text_name={name} part={part} chunk={chunk}",
+                        name=entry.text_name,
+                        part=entry.part,
+                        chunk=chunk.idx,
+                    )
+                    if meta_path.exists():
+                        try:
+                            existing_meta = ChunkEntry.model_validate_json(
+                                meta_path.read_text()
+                            )
+                            position = max(position, existing_meta.position)
+                        except (ValidationError, ValueError):
+                            logger.warning(
+                                "synthesize.meta_parse_failed path={path}",
+                                path=meta_path,
+                            )
+                    continue
                 base_audio = AudioSegment.silent(duration=chunk.pre_pause_ms)
                 sample_rate = int(tts_model.sr)
 
