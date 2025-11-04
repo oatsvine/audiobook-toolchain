@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
+import re
 from pathlib import Path
 from typing import List, Literal, Optional, Sequence
 
@@ -16,6 +17,16 @@ from unstructured.partition.auto import partition
 _PRIMARY_CHUNK_STRATEGY = "by_title"
 _FALLBACK_CHUNK_STRATEGY = "basic"
 _DEFAULT_MAX_CHARACTERS = 8000
+
+_XML_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
+
+
+def _sanitize_for_xml(text: str) -> str:
+    """Strip control characters that are illegal in XML payloads."""
+
+    if not text:
+        return text
+    return _XML_CONTROL_CHAR_RE.sub("", text)
 
 
 class RemovedKind(str, Enum):
@@ -151,6 +162,37 @@ class NormalizedPart(BaseXmlModel, tag="normalized-part", skip_empty=True):
 
     def speaker_names(self) -> List[str]:
         return [speaker.name for speaker in self.speakers]
+
+
+def _sanitize_normalized_part(part: "NormalizedPart") -> "NormalizedPart":
+    changed = False
+    sanitized_fragments: List[NormalizedFragment] = []
+    for fragment in part.fragments:
+        cleaned_content = _sanitize_for_xml(fragment.content)
+        if cleaned_content != fragment.content:
+            fragment = fragment.model_copy(update={"content": cleaned_content})
+            changed = True
+        sanitized_fragments.append(fragment)
+
+    sanitized_speakers: List[NormalizationSpeaker] = []
+    for speaker in part.speakers:
+        evidence = speaker.evidence
+        if evidence is not None:
+            cleaned_evidence = _sanitize_for_xml(evidence)
+            if cleaned_evidence != evidence:
+                speaker = speaker.model_copy(update={"evidence": cleaned_evidence})
+                changed = True
+        sanitized_speakers.append(speaker)
+
+    if not changed:
+        return part
+
+    return part.model_copy(
+        update={
+            "fragments": sanitized_fragments,
+            "speakers": sanitized_speakers,
+        }
+    )
 
 
 class NormalizeRequest(BaseXmlModel, tag="normalize-request", skip_empty=True):
@@ -320,6 +362,15 @@ def normalize_parts(
             messages, config=RunnableConfig(callbacks=[callback])
         )
         normalized: NormalizedPart = result["parsed"]
+
+        sanitized = _sanitize_normalized_part(normalized)
+        if sanitized is not normalized:
+            logger.warning(
+                "normalize.sanitized_control_chars text_name={name} part={part}",
+                name=part.text_name,
+                part=part.part,
+            )
+            normalized = sanitized
 
         assert (
             normalized.text_name == part.text_name

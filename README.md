@@ -1,113 +1,126 @@
 # Laban TTS
 
-*File-first audiobook synthesis workflow anchored in formal acting literature (Normalize → Cue → Synthesize).*
-
-## TL;DR
-
-Instead of orchestrating an opaque graph, we expose a **deterministic, file-first toolchain**: a **sequence of explicit CLI stages** that read/write **self-contained data directories by convention**. Humans can pause between stages, inspect/change files, and resume. Each stage:
+Deterministic, file-first audiobook production pipeline: **normalize → cue → synthesize**. Every stage is an explicit CLI command that reads and writes well-defined artifacts so engineers, directors, and narrators can audit, edit, and rerun any step without hidden state.
 
 ```
-parts/ → normalize/ → cues/ → audio/  (→ finalize/)
+parts/ → normalize/ → cues/ → audio/ (→ finalize/)
 ```
 
-* **Declares preconditions** (required input dirs/files).
-* **Splits and normalizes** the ebook into chunks with the LLM (strip non-performable paratext, adapt to spoken word).
-* **Generates cue scripts** with the LLM from the speaker's Laban profile, rhetoric tag, emphasis.
-* **Keeps stage outputs editable** as normal text files.
-* **Synthesizes audio** with TTS tuning tables that convert cues to precise `chatterbox-tts` delivery.
+## Requirements
 
-Tested with `gpt-5-mini`; using `langchain` makes it easy to swap the LLM. Married to `chatterbox-tts` until standard exaggeration knobs emerge.
+- Python 3.11 (ships with the provided PyTorch CUDA image).
+- `uv` package manager (already available in the container).
+- OpenAI project/API key exported as `OPENAI_API_KEY` (used for normalization + cueing via `gpt-5-mini-2025-08-07`).
+- ffmpeg in the system path (needed by `pydub` to mux WAVs).
+- Optional GPU (8 GiB VRAM works). The toolchain auto-falls back to CPU if chatterbox-tts cannot load on CUDA.
 
----
-
-## Core Concepts
-
-### Workspace
-
-A **workspace** is a folder named after the source text (book or input file). Every stage reads/writes subdirectories under this workspace:
-
-```
-<workspace>/
-  <EBOOK_FILE>    # original inputs (moved/copied here)
-  manifest.json   # optional manifest (indexed view over parts & artifacts)
-  parts/          # manageable slices of source
-  normalize/      # cleaned text + NormalizedOutput JSON
-  cues/           # cued chunks + CuedScript XML
-  audio/          # per-chunk WAV + JSON sidecars
-```
-
-## Stage Contracts
-
-### A. `parts/` (preparation)
-
-* **Inputs:** `book/<file>.epub` **or** `text/<file>.txt`.
-* **Process:** partition into token-bounded parts (or accept a single part).
-* **Outputs:** `parts/<name>-partNNN.txt` + `<name>-partNNN.json` (PartMeta).
-* **Human step:** freely edit any `parts/*.txt` before normalization.
-
-### B. `normalize/`
-
-* **Inputs:** `parts/…txt` + `parts/…json` (PartMeta).
-* **Process:** run LLM with **structured outputs** → `NormalizedOutput`.
-* **Outputs:** text: `…-normalized.txt`; JSON: `…-normalized.json` without the large `cleaned_text` field (kept in `.txt` for review).
-* **Policy:** **fail** if `normalize/` exists (prevent silent clobber); allow `--force`.
-
-### C. `cues/`
-
-* **Inputs:** `normalize/*.json` + `normalize/*.txt`.
-* **Process:** run LLM with **structured outputs** → `CuedScript`.
-* **Outputs:** `…-cues.xml` (editable cue script).
-* **Checks:** coverage heuristic (total chunk text vs normalized length).
-
-### D. `audio/` (synthesize)
-
-* **Inputs:** `cues/*.xml` + voice assets in `voices/`.
-* **Process:** TTS per chunk; write per-chunk WAV + sidecar JSON.
-* **Outputs:** `audio/*.wav` + `audio/*.json`.
-
-### E. `finalize/` (optional, reserved)
-
-* **Inputs:** `audio/*.wav`.
-* **Process:** concatenate/mix/ducking/etc. (future).
-* **Outputs:** final deliverables (e.g., a chapter WAV).
-
----
-
-## Execution Examples
+## Installation
 
 ```bash
-# 0) Initialize a workspace from an EPUB
-python -m laban_tts.book --book_file ~/in/GospelOfThomas.epub --chunk_tokens 3500
-# -> creates: /data/workspace/tts/GospelOfThomas/{GospelOfThomas.epub,manifest.json,parts}
+# From the repository root
+uv pip install -e .
 
-# 1) Human edits the parts/*.txt
-
-# 2) Normalize (fails if normalize/ already exists unless --force)
-python -m laban_tts.normalize /data/workspace/tts/GospelOfThomas
-
-# 3) Cue from normalized outputs
-python -m laban_tts.cue /data/workspace/tts/GospelOfThomas
-
-# 4) Synthesize audio with available voices
-python -m laban_tts.synthesize /data/workspace/tts/GospelOfThomas --prepare_conditionals=true
-
-# (Optional) finalize
-python -m laban_tts.finalize /data/workspace/tts/GospelOfThomas
-
-# ---- OR - run all at once:
-python -m laban_tts.book --book_file ~/in/GospelOfThomas.epub --auto
+# (Optional) confirm Torch + CUDA availability
+python - <<'PY'
+import torch
+print('torch', torch.__version__, 'cuda', torch.cuda.is_available())
+PY
 ```
 
-**Partial re-runs:**
-Fix `parts/<name>-part007.txt` → `normalize` (will regenerate `normalize/*part007*`) → `cue` → `synthesize`. Other parts remain untouched.
+Project dependencies now include `soundfile`; no separate TorchCodec install is required.
 
----
+## Workspace Layout
 
-## Voice Assets
+Workspaces live under `$WORKSPACE_DIR/tts/<text_name>/` (defaults to `/data/workspace`). Running the pipeline on `republic.txt` produces:
 
-* Convention: `voices/` directory adjacent to workspaces **or** a global `voices_dir`.
-* `speaker → voice_path` resolution:
+```
+/data/workspace/tts/republic/
+  manifest.json
+  parts/       # text fragments emitted by partition_text()
+  normalize/   # NormalizedPart XML (one per part)
+  cues/        # CuedScript XML
+  audio/       # <text>_pNNN_####_<speaker>.wav + .json metadata
+```
 
-  * Prefer exact `speaker` name match.
-  * Fallback to `default.wav`.
-* Expose `--voices_dir` and allow **per-chunk override** (e.g., `params.audio_prompt_path` in `CuedScript`).
+Voice references are resolved from `$WORKSPACE_DIR/voices/` (e.g., `voices/enoch.wav`). Provide `speaker:voice` pairs through the CLI when synthesizing.
+
+## Quickstart
+
+1. Place your EPUB, PDF, or plain-text source in `/data/workspace/in/`.
+2. Export your OpenAI key: `export OPENAI_API_KEY=...`.
+3. Run the toolchain end-to-end:
+
+   ```bash
+   python -m laban_tts.workflow run \
+       --text_file /data/workspace/in/republic.txt \
+       --auto \
+       --voice_files default:enoch \
+       --prepare_conditionals=true
+   ```
+
+4. Inspect artifacts between stages (XML, JSON, WAV). Re-run individual stages with `--force` if you edit upstream files.
+
+## Stage Reference
+
+| Stage | Command | Inputs | Outputs | Notes |
+| --- | --- | --- | --- | --- |
+| `parts` | `run` (without `--auto`) | Source text | `parts/*.xml` | Partitioned slices sized for LLM context. |
+| `normalize` | `normalize <workspace>` | `parts/*.xml` | `normalize/*-normalized.xml` | Cleans text, classifies speakers + discourse. |
+| `cue` | `cue <workspace>` | `normalize/*.xml` | `cues/*-cues.xml` | LLM produces chunk, rhetoric, profile, emphasis metadata. |
+| `synthesize` | `synthesize <workspace>` | `cues/*.xml`, voice WAVs | `audio/*.wav` + `.json` | Uses chatterbox-tts; handles GPU OOM with CPU fallback. |
+| `finalize` | `finalize <workspace>` | `audio/*.wav` | Logs inventory | Placeholder for later concatenation/mixing. |
+
+Invoke stages individually:
+
+```bash
+python -m laban_tts.workflow normalize /data/workspace/tts/republic
+python -m laban_tts.workflow cue /data/workspace/tts/republic
+python -m laban_tts.workflow synthesize /data/workspace/tts/republic --voice_files default:enoch
+```
+
+## Regenerating After Edits
+
+Need to tweak a section?
+
+1. Edit `parts/republic-part007.xml` directly.
+2. Re-run `normalize` (only that part is regenerated).
+3. Re-run `cue` and `synthesize`; downstream files for other parts stay untouched.
+
+Use `--force` to allow stages to overwrite existing directories.
+
+## Voices & Prompt Conditioning
+
+- Supply a comma-separated list: `default:enoch,glaucon:enoch`. Speaker identifiers are lowercase.
+- Per-chunk overrides in `CuedScript` (`audio-prompt` attribute) take precedence over CLI flags.
+- `--prepare_conditionals` primes chatterbox-tts with the default voice when supported.
+
+## Testing & QA
+
+Project policy requires:
+
+```bash
+black --check .
+pyright
+pytest -q
+```
+
+Integration smoke test (replace the OpenAI key with your own):
+
+```bash
+export OPENAI_API_KEY=...
+python -m laban_tts.workflow run \
+    --text_file /data/workspace/in/republic.txt \
+    --auto \
+    --voice_files default:enoch
+```
+
+This yields 59 WAV chunks for the sample Republic excerpt and records chunk timing metadata alongside the audio.
+
+## Troubleshooting
+
+- **CUDA out of memory:** the loader automatically retries on CPU (`tts.load_cuda_failed` warning). Expect longer synthesis times but stable output.
+- **Missing voice files:** ensure `<voice_name>.wav` exists under `$WORKSPACE_DIR/voices/`. Set `--voice_files default:<voice>` to avoid per-speaker resolution errors.
+- **ffmpeg errors:** install binary utilities (`apt-get install ffmpeg`) so `pydub` can decode WAV buffers.
+- **LLM quota/timeouts:** the pipeline uses structured outputs; failing calls abort the stage. Re-run once quotas recover.
+
+For deeper context, the project scratchpad (`scratchpad.md`) logs the latest pipeline run, token usage, and validation notes.

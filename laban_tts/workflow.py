@@ -14,23 +14,30 @@ regenerate outputs.
 
 from __future__ import annotations
 
-# NOTE: Lazy imports are illegal.
-from langchain_core.runnables import RunnableConfig
 import os
 import shutil
 import subprocess
 from io import BytesIO
 from pathlib import Path
-from typing import Dict, Generator, List, Literal, Optional, Sequence, Tuple
+from typing import Dict, List, Literal, Optional, Sequence, Tuple
 
 import fire
+import soundfile as sf
+import torch
+import torchaudio  # type: ignore[import]
+from chatterbox.tts import ChatterboxTTS  # type: ignore[import]
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.messages import HumanMessage, SystemMessage
+
+# NOTE: Lazy imports are illegal.
+from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 from pydantic_xml import BaseXmlModel, attr, element, wrapped
+from pydub import AudioSegment
 
+from laban_tts.cues import CUE_PRIMER, CUE_PROMPT, CuedScript
 from laban_tts.normalize import (
     TextType,
     load_normalized_parts,
@@ -38,13 +45,6 @@ from laban_tts.normalize import (
     normalize_parts,
     partition_text,
 )
-from laban_tts.cues import CUE_PRIMER, CUE_PROMPT, CuedScript
-
-import torch
-import torchaudio  # type: ignore[import]
-from chatterbox.tts import ChatterboxTTS  # type: ignore[import]
-from pydub import AudioSegment
-import soundfile as sf
 
 
 def _load_tts_model() -> ChatterboxTTS:
