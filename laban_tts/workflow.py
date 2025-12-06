@@ -23,9 +23,6 @@ from typing import Dict, List, Literal, Optional, Sequence, Tuple
 
 import fire
 import soundfile as sf
-import torch
-import torchaudio  # type: ignore[import]
-from chatterbox.tts import ChatterboxTTS  # type: ignore[import]
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -39,6 +36,7 @@ from pydub import AudioSegment
 
 from laban_tts.cues import CUE_PRIMER, CUE_PROMPT, CuedScript
 from laban_tts.normalize import (
+    NormalizedPart,
     TextType,
     load_normalized_parts,
     load_parts,
@@ -46,30 +44,6 @@ from laban_tts.normalize import (
     partition_text,
 )
 
-
-def _load_tts_model() -> ChatterboxTTS:
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    try:
-        return ChatterboxTTS.from_pretrained(device=device)
-    except RuntimeError as exc:  # pragma: no cover - import-time guard
-        message = str(exc)
-        if device == "cuda" and "out of memory" in message.lower():
-            logger.warning(
-                "tts.load_cuda_failed falling back to CPU due to OOM",
-            )
-            torch.cuda.empty_cache()
-            return ChatterboxTTS.from_pretrained(device="cpu")
-        raise
-
-
-tts_model = _load_tts_model()
-
-_TORCHAUDIO_BACKENDS = getattr(torchaudio, "list_audio_backends", lambda: [])()
-logger.info(
-    "torchaudio.version={version} backends={backends}",
-    version=torchaudio.__version__,
-    backends=_TORCHAUDIO_BACKENDS,
-)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Prompts (concise). We rely on the Pydantic field descriptions for formatting.
@@ -140,7 +114,6 @@ class Toolchain:
         voices_dir: Path | str = WORKSPACE_DIR / "voices",
         workspace_dir: Path | str = WORKSPACE_DIR / "tts",
         force: bool = False,
-        llm=None,
         model_name: str = "gpt-5-mini",
         language_id: Optional[str] = None,
     ) -> None:
@@ -165,11 +138,7 @@ class Toolchain:
         self.voices_dir.mkdir(parents=True, exist_ok=True)
         self.workspace_dir = Path(workspace_dir)
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
-        self.llm = llm or ChatOpenAI(
-            model=model_name,
-            temperature=0,
-            max_retries=3,
-        )
+        self.model_name = model_name
 
     # —————————————————— Utilities ——————————————————
 
@@ -318,8 +287,14 @@ class Toolchain:
         parts = load_parts(parts_dir)
         if not parts:
             raise ValueError("No parts found to normalize.")
+
+        llm = ChatOpenAI(
+            model=self.model_name,
+            temperature=0,
+            max_retries=3,
+        )
         normalized_entries = normalize_parts(
-            parts, normalize_dir, self.llm, force=self.force
+            parts, normalize_dir, llm, force=self.force
         )
         logger.info(
             "normalize.done work_dir={work_dir} parts={count}",
@@ -353,6 +328,11 @@ class Toolchain:
         if not normalized_entries:
             raise ValueError("No normalized outputs found; run `normalize` first.")
 
+        llm = ChatOpenAI(
+            model=self.model_name,
+            temperature=0,
+            max_retries=3,
+        )
         previous_script: Optional[CuedScript] = None
         for entry in normalized_entries:
             stem = f"{entry.text_name}-part{entry.part:03d}-cues"
@@ -395,7 +375,7 @@ class Toolchain:
                 part=entry.part,
             )
             callback = UsageMetadataCallbackHandler()
-            res = self.llm.with_structured_output(CuedScript, include_raw=True).invoke(
+            res = llm.with_structured_output(CuedScript, include_raw=True).invoke(
                 messages, config=RunnableConfig(callbacks=[callback])
             )
             script: CuedScript = res["parsed"]
@@ -457,6 +437,22 @@ class Toolchain:
             FileNotFoundError: If the cue directory is missing.
             ValueError: If no cue scripts are available.
         """
+
+        # NOTE: Exceptionally importing inside the local scope given the heavy dependencies.
+        import torch
+        import torchaudio  # type: ignore[import]
+        from chatterbox.tts import ChatterboxTTS  # type: ignore[import]
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        tts_model = ChatterboxTTS.from_pretrained(device=device)
+
+        backends = getattr(torchaudio, "list_audio_backends", lambda: [])()
+        logger.info(
+            "torchaudio.version={version} backends={backends}",
+            version=torchaudio.__version__,
+            backends=backends,
+        )
+
         workspace = self._resolve_workspace(work_dir)
         cue_dir = workspace / "cues"
         if not cue_dir.exists():
@@ -567,6 +563,7 @@ class Toolchain:
                             f"Unexpected waveform shape: {tuple(waveform.shape)}"
                         )
                     buf = BytesIO()
+                    # TODO: Why is it necessary to do this and not just use pydub directly?
                     sf.write(buf, samples, sample_rate, format="WAV")
                     buf.seek(0)
                     base_audio += AudioSegment.from_file(buf, format="wav")
@@ -629,6 +626,33 @@ class Toolchain:
             count=len(wav_files),
         )
 
+    def info(
+        self,
+        work_dir: Path | str = "",
+    ) -> None:
+        workspace = self._resolve_workspace(work_dir)
+        parts_dir = workspace / "parts"
+        parts = load_parts(parts_dir)
+        normalize_dir = workspace / "normalize"
+        results: List[NormalizedPart] = []
+        for part in parts:
+            xml_path = (
+                normalize_dir / f"{part.text_name}-part{part.part:03d}-normalized.xml"
+            )
+            if xml_path.exists():
+                logger.debug(
+                    "Reusing normalized part {}",
+                    xml_path,
+                )
+                result = NormalizedPart.from_xml(xml_path.read_text())
+                results.append(result)
+        logger.info(
+            "info.work_dir={work_dir} parts={part_count} normalized={norm_count}",
+            work_dir=workspace,
+            part_count=len(parts),
+            norm_count=len(results),
+        )
+
     def run(
         self,
         text_file: Path | str = "",
@@ -656,9 +680,12 @@ class Toolchain:
 
         work_dir = self.workspace_dir / text_file.stem
         work_dir.mkdir(parents=True, exist_ok=True)
-        manifest = Manifest(text_name=text_file.stem, workspace=work_dir, kind="book")
         manifest_file = work_dir / "manifest.json"
-        manifest_file.write_text(manifest.model_dump_json(indent=2))
+        if not manifest_file.exists():
+            manifest = Manifest(
+                text_name=text_file.stem, workspace=work_dir, kind="book"
+            )
+            manifest_file.write_text(manifest.model_dump_json(indent=2))
 
         parts_dir = work_dir / "parts"
         self._prepare_output_dir(parts_dir, stage="parts")

@@ -3,6 +3,7 @@ from __future__ import annotations
 from enum import Enum
 import re
 from pathlib import Path
+import shutil
 from typing import List, Literal, Optional, Sequence
 
 from langchain_core.callbacks import UsageMetadataCallbackHandler
@@ -86,6 +87,7 @@ class NormalizedFragment(BaseXmlModel, tag="fragment", skip_empty=True):
     content: str = element(
         tag="content",
         description="Literal text for this fragment.",
+        default_factory=str,
     )
 
     def cleaned(self) -> str:
@@ -162,37 +164,6 @@ class NormalizedPart(BaseXmlModel, tag="normalized-part", skip_empty=True):
 
     def speaker_names(self) -> List[str]:
         return [speaker.name for speaker in self.speakers]
-
-
-def _sanitize_normalized_part(part: "NormalizedPart") -> "NormalizedPart":
-    changed = False
-    sanitized_fragments: List[NormalizedFragment] = []
-    for fragment in part.fragments:
-        cleaned_content = _sanitize_for_xml(fragment.content)
-        if cleaned_content != fragment.content:
-            fragment = fragment.model_copy(update={"content": cleaned_content})
-            changed = True
-        sanitized_fragments.append(fragment)
-
-    sanitized_speakers: List[NormalizationSpeaker] = []
-    for speaker in part.speakers:
-        evidence = speaker.evidence
-        if evidence is not None:
-            cleaned_evidence = _sanitize_for_xml(evidence)
-            if cleaned_evidence != evidence:
-                speaker = speaker.model_copy(update={"evidence": cleaned_evidence})
-                changed = True
-        sanitized_speakers.append(speaker)
-
-    if not changed:
-        return part
-
-    return part.model_copy(
-        update={
-            "fragments": sanitized_fragments,
-            "speakers": sanitized_speakers,
-        }
-    )
 
 
 class NormalizeRequest(BaseXmlModel, tag="normalize-request", skip_empty=True):
@@ -314,6 +285,7 @@ def load_parts(parts_dir: Path) -> List[TextPart]:
 
     documents: List[TextPart] = []
     for xml_path in sorted(parts_dir.glob("*.xml")):
+        logger.debug("load_parts.reading {}", xml_path)
         document = TextPart.from_xml(xml_path.read_text())
         documents.append(document)
     documents.sort(key=lambda part: (part.text_name, part.part))
@@ -332,6 +304,8 @@ def normalize_parts(
     if not parts:
         raise ValueError("No parts provided for normalization.")
 
+    if force:
+        shutil.rmtree(normalize_dir, ignore_errors=True)
     normalize_dir.mkdir(parents=True, exist_ok=True)
 
     results: List[NormalizedPart] = []
@@ -339,31 +313,13 @@ def normalize_parts(
         xml_path = (
             normalize_dir / f"{part.text_name}-part{part.part:03d}-normalized.xml"
         )
-        if xml_path.exists() and not force:
+        if xml_path.exists():
             logger.info(
-                "normalize.skip_existing text_name={name} part={part}",
-                name=part.text_name,
-                part=part.part,
+                "Reading existing normalized part {}",
+                xml_path,
             )
-            persisted = NormalizedPart.from_xml(xml_path.read_text())
-            sanitized_existing = _sanitize_normalized_part(persisted)
-            if sanitized_existing is not persisted:
-                logger.warning(
-                    "normalize.sanitized_existing text_name={name} part={part}",
-                    name=part.text_name,
-                    part=part.part,
-                )
-                existing_payload = sanitized_existing.to_xml(
-                    encoding="unicode", pretty_print=True, skip_empty=True
-                )
-                existing_payload_str = (
-                    existing_payload
-                    if isinstance(existing_payload, str)
-                    else existing_payload.decode()
-                )
-                xml_path.write_text(existing_payload_str)
-                persisted = sanitized_existing
-            results.append(persisted)
+            result = NormalizedPart.from_xml(xml_path.read_text())
+            results.append(result)
             continue
 
         metadata_xml = NormalizeRequest(
@@ -394,16 +350,6 @@ def normalize_parts(
             messages, config=RunnableConfig(callbacks=[callback])
         )
         normalized: NormalizedPart = result["parsed"]
-
-        sanitized = _sanitize_normalized_part(normalized)
-        if sanitized is not normalized:
-            logger.warning(
-                "normalize.sanitized_control_chars text_name={name} part={part}",
-                name=part.text_name,
-                part=part.part,
-            )
-            normalized = sanitized
-
         assert (
             normalized.text_name == part.text_name
         ), "LLM returned mismatched text_name."

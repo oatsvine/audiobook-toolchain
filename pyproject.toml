@@ -7,7 +7,7 @@ name = "laban-tts"
 version = "0.1.0"
 description = "Voice acting driven audiobook synthesis using LLM generated cue scripts."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = "==3.11.14"
 authors = [
   { name = "Santu Mariani<santumariani@proton.me>" }
 ]
@@ -23,9 +23,19 @@ dependencies = [
   "tiktoken",
   "unstructured[md]",
   "pydub",
+  "soundfile",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
+dev = [
+  "pytest",
+  "pytest-asyncio",
+  "pyright",
+  "black",
+]
+dev-torch = [
+  "torchaudio",
+]
 chatterbox = [
   "chatterbox-tts==0.1.4",
   "pykakasi==2.3.0",  
@@ -34,15 +44,13 @@ chatterbox = [
 docs = [
   "unstructured[pdf,epub,huggingface,docx,image,rst]", # See unstructured docs for OS dependencies.
 ]
-dev = [
-  "pytest",
-  "pytest-asyncio",
-  "pyright",
-  "black",
-]
 
 [tool.setuptools]
 packages = ["laban_tts"]
+
+[tool.uv.extra-build-dependencies]
+pkuseg = ["numpy"]
+
 
 [tool.pyright]
 include = ["laban_tts", "tests"]
@@ -55,9 +63,6 @@ override-dependencies = [
   "langgraph>=1.0.0a4",
   "langchain-openai>=1.0.0a3",
 ]
-
-[tool.uv.pip]
-prerelease = "allow"
 
 [tool.pytest.ini_options]
 testpaths = [

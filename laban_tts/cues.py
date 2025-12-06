@@ -667,6 +667,7 @@ class CuedChunk(BaseXmlModel, tag="chunk", skip_empty=True):
     text: str = element(
         tag="text",
         description="Normalized text to synthesize. Punctuation already audience-friendly.",
+        default_factory=str,
     )
     speaker: str = attr(
         description="Normalized speaker name for this chunk (lowercase, dashes), or 'narrator' if generic."
